@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { supabase } from '../lib/supabase';
+import { io, Socket } from 'socket.io-client';
+import { api } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 import { Sidebar } from '../components/Sidebar';
 import { TopBar } from '../components/TopBar';
@@ -12,8 +13,7 @@ import { ChatPanel } from '../components/ChatPanel';
 import { SearchPanel } from '../components/SearchPanel';
 import { VersionHistory } from '../components/VersionHistory';
 import { SettingsPanel } from '../components/SettingsPanel';
-import type { Project, ProjectFile, ChatMessage, Version, User } from '../types';
-import { v4 as uuidv4 } from 'uuid';
+import type { Project, ProjectFile, ChatMessage, Version } from '../types';
 
 interface EditorPageProps {
   project: Project;
@@ -34,97 +34,103 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
   const [leftWidth, setLeftWidth] = useState(250);
   const [isResizing, setIsResizing] = useState(false);
   const fileContentRef = useRef<Map<string, string>>(new Map());
+  const socketRef = useRef<Socket | null>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     loadFiles();
     loadMessages();
     loadVersions();
+
+    const socket = io('/', { path: '/api/socket.io' });
+    socketRef.current = socket;
+    socket.emit('join-project', project.id);
+
+    socket.on('chat-message', (msg: ChatMessage) => {
+      setMessages((prev) => [...prev, msg]);
+    });
+
+    socket.on('file-change', ({ fileId, content }: { fileId: string; content: string }) => {
+      setFiles((prev) => prev.map((f) => (f.id === fileId ? { ...f, content } : f)));
+      fileContentRef.current.set(fileId, content);
+    });
+
+    return () => {
+      socket.emit('leave-project', project.id);
+      socket.disconnect();
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
   }, [project.id]);
 
   async function loadFiles() {
-    const { data, error } = await supabase
-      .from('project_files')
-      .select('*')
-      .eq('project_id', project.id)
-      .order('name');
-
-    if (!error && data) {
-      setFiles(data as ProjectFile[]);
-      const mainFile = data.find((f: ProjectFile) => f.name === 'index.html' || f.name === 'index.js');
+    try {
+      const data = await api.files.list(project.id);
+      setFiles(data);
+      const mainFile = data.find((f) => f.name === 'index.html' || f.name === 'index.js');
       if (mainFile && !selectedFile) {
-        setSelectedFile(mainFile as ProjectFile);
-        setOpenFiles([mainFile as ProjectFile]);
+        setSelectedFile(mainFile);
+        setOpenFiles([mainFile]);
       }
+    } catch (err) {
+      console.error('Failed to load files:', err);
     }
   }
 
   async function loadMessages() {
-    const { data, error } = await supabase
-      .from('chat_messages')
-      .select('*, user:profiles!chat_messages_user_id_fkey(*)')
-      .eq('project_id', project.id)
-      .order('created_at', { ascending: true });
-
-    if (!error && data) {
-      setMessages(data as ChatMessage[]);
+    try {
+      const data = await api.messages.list(project.id);
+      setMessages(data);
+    } catch (err) {
+      console.error('Failed to load messages:', err);
     }
   }
 
   async function loadVersions() {
-    const { data, error } = await supabase
-      .from('versions')
-      .select('*, user:profiles!versions_user_id_fkey(*)')
-      .eq('project_id', project.id)
-      .order('created_at', { ascending: false })
-      .limit(50);
-
-    if (!error && data) {
-      setVersions(data as Version[]);
+    try {
+      const data = await api.versions.list(project.id);
+      setVersions(data);
+    } catch (err) {
+      console.error('Failed to load versions:', err);
     }
   }
 
   const handleSelectFile = useCallback((file: ProjectFile) => {
     if (file.is_folder) return;
     setSelectedFile(file);
-    if (!openFiles.find((f) => f.id === file.id)) {
-      setOpenFiles([...openFiles, file]);
-    }
-  }, [openFiles]);
+    setOpenFiles((prev) => (prev.find((f) => f.id === file.id) ? prev : [...prev, file]));
+  }, []);
 
   const createFile = async (parentId: string | null, name: string, isFolder: boolean) => {
     const parent = parentId ? files.find((f) => f.id === parentId) : null;
     const path = parent ? `${parent.path}/${name}` : `/${name}`;
-
     const language = isFolder ? undefined : getLanguageFromFileName(name);
 
-    const { data, error } = await supabase
-      .from('project_files')
-      .insert({
-        project_id: project.id,
+    try {
+      const file = await api.files.create(project.id, {
         name,
         path,
         is_folder: isFolder,
         language,
-        parent_id: parentId,
-        content: isFolder ? null : '',
-      })
-      .select()
-      .single();
-
-    if (!error && data) {
-      setFiles([...files, data as ProjectFile]);
-      if (!isFolder) {
-        handleSelectFile(data as ProjectFile);
-      }
+        parent_id: parentId || undefined,
+        content: isFolder ? undefined : '',
+      });
+      setFiles((prev) => [...prev, file]);
+      if (!isFolder) handleSelectFile(file);
+    } catch (err) {
+      console.error('Failed to create file:', err);
     }
   };
 
   const deleteFile = async (file: ProjectFile) => {
-    await supabase.from('project_files').delete().eq('id', file.id);
-    setFiles(files.filter((f) => f.id !== file.id));
-    setOpenFiles(openFiles.filter((f) => f.id !== file.id));
-    if (selectedFile?.id === file.id) {
-      setSelectedFile(openFiles[0] || null);
+    try {
+      await api.files.delete(file.id);
+      setFiles((prev) => prev.filter((f) => f.id !== file.id));
+      setOpenFiles((prev) => prev.filter((f) => f.id !== file.id));
+      if (selectedFile?.id === file.id) {
+        setSelectedFile(openFiles.find((f) => f.id !== file.id) || null);
+      }
+    } catch (err) {
+      console.error('Failed to delete file:', err);
     }
   };
 
@@ -132,96 +138,87 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
     const parent = file.parent_id ? files.find((f) => f.id === file.parent_id) : null;
     const path = parent ? `${parent.path}/${newName}` : `/${newName}`;
 
-    const { error } = await supabase
-      .from('project_files')
-      .update({ name: newName, path, language: getLanguageFromFileName(newName) })
-      .eq('id', file.id);
-
-    if (!error) {
-      setFiles(files.map((f) => (f.id === file.id ? { ...f, name: newName, path } : f)));
-      setOpenFiles(openFiles.map((f) => (f.id === file.id ? { ...f, name: newName, path } : f)));
+    try {
+      await api.files.update(file.id, { name: newName, path, language: getLanguageFromFileName(newName) });
+      setFiles((prev) => prev.map((f) => (f.id === file.id ? { ...f, name: newName, path } : f)));
+      setOpenFiles((prev) => prev.map((f) => (f.id === file.id ? { ...f, name: newName, path } : f)));
+    } catch (err) {
+      console.error('Failed to rename file:', err);
     }
   };
 
-  const handleContentChange = useCallback(async (value: string) => {
+  const handleContentChange = useCallback((value: string) => {
     if (!selectedFile) return;
-
-    setSaveStatus('saving');
     fileContentRef.current.set(selectedFile.id, value);
+    setSaveStatus('unsaved');
 
-    const { error } = await supabase
-      .from('project_files')
-      .update({ content: value, updated_at: new Date().toISOString() })
-      .eq('id', selectedFile.id);
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(async () => {
+      setSaveStatus('saving');
+      try {
+        await api.files.update(selectedFile.id, { content: value });
+        setFiles((prev) =>
+          prev.map((f) => (f.id === selectedFile.id ? { ...f, content: value } : f))
+        );
+        setSaveStatus('saved');
 
-    if (!error) {
-      setFiles(files.map((f) =>
-        f.id === selectedFile.id ? { ...f, content: value } : f
-      ));
-      setOpenFiles(openFiles.map((f) =>
-        f.id === selectedFile.id ? { ...f, content: value } : f
-      ));
-      setSaveStatus('saved');
-    } else {
-      setSaveStatus('unsaved');
-    }
-  }, [selectedFile, files, openFiles]);
+        socketRef.current?.emit('file-change', {
+          projectId: project.id,
+          fileId: selectedFile.id,
+          content: value,
+        });
+      } catch {
+        setSaveStatus('unsaved');
+      }
+    }, 800);
+  }, [selectedFile, project.id]);
 
   const handleSave = useCallback(() => {
-    if (selectedFile) {
-      const content = fileContentRef.current.get(selectedFile.id) || selectedFile.content || '';
-      handleContentChange(content);
-    }
-  }, [selectedFile, handleContentChange]);
+    if (!selectedFile) return;
+    const content = fileContentRef.current.get(selectedFile.id) ?? selectedFile.content ?? '';
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    setSaveStatus('saving');
+    api.files.update(selectedFile.id, { content }).then(() => {
+      setFiles((prev) => prev.map((f) => (f.id === selectedFile.id ? { ...f, content } : f)));
+      setSaveStatus('saved');
+    }).catch(() => setSaveStatus('unsaved'));
+  }, [selectedFile]);
 
   const handleSendMessage = async (content: string) => {
     if (!user) return;
-
-    const { data, error } = await supabase
-      .from('chat_messages')
-      .insert({
-        project_id: project.id,
-        user_id: user.id,
-        content,
-      })
-      .select('*, user:profiles!chat_messages_user_id_fkey(*)')
-      .single();
-
-    if (!error && data) {
-      setMessages([...messages, data as ChatMessage]);
+    try {
+      const msg = await api.messages.create(project.id, content);
+      setMessages((prev) => [...prev, msg]);
+      socketRef.current?.emit('chat-message', { projectId: project.id, message: msg });
+    } catch (err) {
+      console.error('Failed to send message:', err);
     }
   };
 
   const createVersion = async (fileId: string | null, message: string) => {
     if (!user) return;
-
-    const { data, error } = await supabase
-      .from('versions')
-      .insert({
-        project_id: project.id,
-        file_id: fileId,
-        user_id: user.id,
-        content: selectedFile?.content || null,
+    try {
+      const version = await api.versions.create(project.id, {
+        file_id: fileId || undefined,
+        content: selectedFile?.content || undefined,
         message,
-      })
-      .select('*, user:profiles!versions_user_id_fkey(*)')
-      .single();
-
-    if (!error && data) {
-      setVersions([data as Version, ...versions]);
+      });
+      setVersions((prev) => [version, ...prev]);
+    } catch (err) {
+      console.error('Failed to create version:', err);
     }
   };
 
   const restoreVersion = async (version: Version) => {
     if (version.file_id && version.content) {
-      await supabase
-        .from('project_files')
-        .update({ content: version.content, updated_at: new Date().toISOString() })
-        .eq('id', version.file_id);
-
-      setFiles(files.map((f) =>
-        f.id === version.file_id ? { ...f, content: version.content } : f
-      ));
+      try {
+        await api.files.update(version.file_id, { content: version.content });
+        setFiles((prev) =>
+          prev.map((f) => (f.id === version.file_id ? { ...f, content: version.content } : f))
+        );
+      } catch (err) {
+        console.error('Failed to restore version:', err);
+      }
     }
   };
 
@@ -245,19 +242,14 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (!isResizing) return;
-      const newWidth = e.clientX - 56;
-      setLeftWidth(Math.max(150, Math.min(400, newWidth)));
+      setLeftWidth(Math.max(150, Math.min(400, e.clientX - 56)));
     };
-
-    const handleMouseUp = () => {
-      setIsResizing(false);
-    };
+    const handleMouseUp = () => setIsResizing(false);
 
     if (isResizing) {
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
     }
-
     return () => {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
@@ -291,11 +283,7 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
       />
 
       <div className="flex-1 flex min-h-0">
-        <Sidebar
-          activeTab={activeTab}
-          onTabChange={setActiveTab}
-          onDashboard={onBackToDashboard}
-        />
+        <Sidebar activeTab={activeTab} onTabChange={setActiveTab} onDashboard={onBackToDashboard} />
 
         <div style={{ width: leftWidth }} className="min-w-[150px] max-w-[400px] flex flex-col border-r border-slate-700/50 relative">
           {activeTab === 'files' && (
@@ -309,11 +297,7 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
             />
           )}
           {activeTab === 'search' && (
-            <SearchPanel
-              files={files}
-              currentFile={selectedFile?.id}
-              onSelectFile={handleSelectFile}
-            />
+            <SearchPanel files={files} currentFile={selectedFile?.id} onSelectFile={handleSelectFile} />
           )}
           {activeTab === 'git' && (
             <VersionHistory
@@ -363,7 +347,7 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          setOpenFiles(openFiles.filter((f) => f.id !== file.id));
+                          setOpenFiles((prev) => prev.filter((f) => f.id !== file.id));
                           if (selectedFile?.id === file.id) {
                             setSelectedFile(openFiles.find((f) => f.id !== file.id) || null);
                           }
@@ -381,7 +365,7 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
                 {selectedFile && !selectedFile.is_folder ? (
                   <CodeEditor
                     language={selectedFile.language || 'plaintext'}
-                    value={fileContentRef.current.get(selectedFile.id) || selectedFile.content || ''}
+                    value={fileContentRef.current.get(selectedFile.id) ?? selectedFile.content ?? ''}
                     onChange={handleContentChange}
                     onSave={handleSave}
                     onCursorChange={setCursorPosition}
@@ -399,11 +383,7 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
 
             {showPreview && (
               <div className="w-[50%] border-l border-slate-700/50">
-                <Preview
-                  html={previewContent.html}
-                  css={previewContent.css}
-                  javascript={previewContent.javascript}
-                />
+                <Preview html={previewContent.html} css={previewContent.css} javascript={previewContent.javascript} />
               </div>
             )}
           </div>
@@ -425,37 +405,13 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
 function getLanguageFromFileName(name: string): string {
   const ext = name.split('.').pop()?.toLowerCase();
   const languages: Record<string, string> = {
-    js: 'javascript',
-    jsx: 'javascript',
-    ts: 'typescript',
-    tsx: 'typescript',
-    py: 'python',
-    java: 'java',
-    c: 'c',
-    cpp: 'cpp',
-    h: 'cpp',
-    hpp: 'cpp',
-    cs: 'csharp',
-    go: 'go',
-    rs: 'rust',
-    rb: 'ruby',
-    php: 'php',
-    swift: 'swift',
-    kt: 'kotlin',
-    html: 'html',
-    htm: 'html',
-    css: 'css',
-    scss: 'scss',
-    less: 'less',
-    json: 'json',
-    xml: 'xml',
-    yaml: 'yaml',
-    yml: 'yaml',
-    md: 'markdown',
-    sql: 'sql',
-    sh: 'shell',
-    bash: 'shell',
-    dockerfile: 'dockerfile',
+    js: 'javascript', jsx: 'javascript', ts: 'typescript', tsx: 'typescript',
+    py: 'python', java: 'java', c: 'c', cpp: 'cpp', h: 'cpp', hpp: 'cpp',
+    cs: 'csharp', go: 'go', rs: 'rust', rb: 'ruby', php: 'php',
+    swift: 'swift', kt: 'kotlin', html: 'html', htm: 'html',
+    css: 'css', scss: 'scss', less: 'less', json: 'json', xml: 'xml',
+    yaml: 'yaml', yml: 'yaml', md: 'markdown', sql: 'sql',
+    sh: 'shell', bash: 'shell', dockerfile: 'dockerfile',
   };
   return languages[ext || ''] || 'plaintext';
 }

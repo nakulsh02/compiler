@@ -1,19 +1,15 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { supabase } from '../lib/supabase';
+import { api } from '../lib/api';
 import {
   Plus,
   Folder,
   Star,
   Clock,
-  Users,
-  MoreVertical,
   Trash2,
   Copy,
-  Edit3,
   FileCode,
   Search,
-  Filter,
   Grid,
   List,
   Star as StarIcon,
@@ -26,7 +22,7 @@ interface DashboardPageProps {
   onNewProject: () => void;
 }
 
-export function DashboardPage({ onOpenProject, onNewProject }: DashboardPageProps) {
+export function DashboardPage({ onOpenProject }: DashboardPageProps) {
   const { user } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -36,6 +32,7 @@ export function DashboardPage({ onOpenProject, onNewProject }: DashboardPageProp
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectLanguage, setNewProjectLanguage] = useState('javascript');
+  const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     loadProjects();
@@ -43,108 +40,85 @@ export function DashboardPage({ onOpenProject, onNewProject }: DashboardPageProp
 
   async function loadProjects() {
     setLoading(true);
-    const { data, error } = await supabase
-      .from('projects')
-      .select('*')
-      .order('updated_at', { ascending: false });
-
-    if (!error && data) {
-      setProjects(data as Project[]);
+    try {
+      const data = await api.projects.list();
+      setProjects(data);
+    } catch (err) {
+      console.error('Failed to load projects:', err);
     }
     setLoading(false);
   }
 
   async function createProject() {
-    if (!newProjectName.trim()) return;
+    if (!newProjectName.trim() || creating) return;
+    setCreating(true);
 
-    const { data, error } = await supabase
-      .from('projects')
-      .insert({
+    try {
+      const project = await api.projects.create({
         name: newProjectName,
         language: newProjectLanguage,
-      })
-      .select()
-      .single();
+      });
 
-    if (!error && data) {
-      const { error: filesError } = await supabase
-        .from('project_files')
-        .insert([
-          {
-            project_id: data.id,
-            name: 'src',
-            path: '/src',
-            is_folder: true,
-          },
-          {
-            project_id: data.id,
-            name: getFileTemplate(newProjectLanguage).name,
-            path: getFileTemplate(newProjectLanguage).path,
-            content: getFileTemplate(newProjectLanguage).content,
-            language: newProjectLanguage,
-            is_folder: false,
-          },
-          {
-            project_id: data.id,
-            name: 'index.html',
-            path: '/index.html',
-            content: getHtmlTemplate(newProjectName),
-            language: 'html',
-            is_folder: false,
-          },
-        ]);
+      const template = getFileTemplate(newProjectLanguage);
+      await api.files.bulkCreate(project.id, [
+        { name: 'src', path: '/src', is_folder: true },
+        {
+          name: template.name,
+          path: template.path,
+          content: template.content,
+          language: newProjectLanguage,
+          is_folder: false,
+        },
+        {
+          name: 'index.html',
+          path: '/index.html',
+          content: getHtmlTemplate(newProjectName),
+          language: 'html',
+          is_folder: false,
+        },
+      ]);
 
-      if (!filesError) {
-        setProjects([data as Project, ...projects]);
-        setShowNewProjectModal(false);
-        setNewProjectName('');
-        onOpenProject(data as Project);
-      }
+      setProjects([project, ...projects]);
+      setShowNewProjectModal(false);
+      setNewProjectName('');
+      onOpenProject(project);
+    } catch (err) {
+      console.error('Failed to create project:', err);
     }
+    setCreating(false);
   }
 
   async function deleteProject(project: Project) {
     if (!confirm(`Delete "${project.name}"? This cannot be undone.`)) return;
-
-    await supabase.from('projects').delete().eq('id', project.id);
-    setProjects(projects.filter((p) => p.id !== project.id));
+    try {
+      await api.projects.delete(project.id);
+      setProjects(projects.filter((p) => p.id !== project.id));
+    } catch (err) {
+      console.error('Failed to delete project:', err);
+    }
   }
 
   async function toggleStar(project: Project) {
-    const { error } = await supabase
-      .from('projects')
-      .update({ starred: !project.starred })
-      .eq('id', project.id);
-
-    if (!error) {
-      setProjects(
-        projects.map((p) =>
-          p.id === project.id ? { ...p, starred: !p.starred } : p
-        )
-      );
+    try {
+      const updated = await api.projects.update(project.id, { starred: !project.starred });
+      setProjects(projects.map((p) => (p.id === project.id ? updated : p)));
+    } catch (err) {
+      console.error('Failed to star project:', err);
     }
   }
 
   async function duplicateProject(project: Project) {
-    const { data, error } = await supabase
-      .from('projects')
-      .insert({
+    try {
+      const newProject = await api.projects.create({
         name: `${project.name} (Copy)`,
         language: project.language,
-      })
-      .select()
-      .single();
+      });
 
-    if (!error && data) {
-      const { data: files } = await supabase
-        .from('project_files')
-        .select('*')
-        .eq('project_id', project.id);
-
-      if (files && files.length > 0) {
-        await supabase.from('project_files').insert(
+      const files = await api.files.list(project.id);
+      if (files.length > 0) {
+        await api.files.bulkCreate(
+          newProject.id,
           files.map((f) => ({
-            project_id: data.id,
             name: f.name,
             path: f.path,
             content: f.content,
@@ -155,7 +129,9 @@ export function DashboardPage({ onOpenProject, onNewProject }: DashboardPageProp
         );
       }
 
-      setProjects([data as Project, ...projects]);
+      setProjects([newProject, ...projects]);
+    } catch (err) {
+      console.error('Failed to duplicate project:', err);
     }
   }
 
@@ -212,50 +188,20 @@ export function DashboardPage({ onOpenProject, onNewProject }: DashboardPageProp
               />
             </div>
             <div className="flex items-center gap-2">
-              <button
-                onClick={() => setFilter('all')}
-                className={clsx(
-                  'px-3 py-1.5 rounded-lg text-sm transition-colors',
-                  filter === 'all'
-                    ? 'bg-cyan-500/20 text-cyan-400'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-700'
-                )}
-              >
-                All
-              </button>
-              <button
-                onClick={() => setFilter('owned')}
-                className={clsx(
-                  'px-3 py-1.5 rounded-lg text-sm transition-colors',
-                  filter === 'owned'
-                    ? 'bg-cyan-500/20 text-cyan-400'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-700'
-                )}
-              >
-                Owned
-              </button>
-              <button
-                onClick={() => setFilter('shared')}
-                className={clsx(
-                  'px-3 py-1.5 rounded-lg text-sm transition-colors',
-                  filter === 'shared'
-                    ? 'bg-cyan-500/20 text-cyan-400'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-700'
-                )}
-              >
-                Shared
-              </button>
-              <button
-                onClick={() => setFilter('starred')}
-                className={clsx(
-                  'px-3 py-1.5 rounded-lg text-sm transition-colors',
-                  filter === 'starred'
-                    ? 'bg-cyan-500/20 text-cyan-400'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-700'
-                )}
-              >
-                Starred
-              </button>
+              {(['all', 'owned', 'shared', 'starred'] as const).map((f) => (
+                <button
+                  key={f}
+                  onClick={() => setFilter(f)}
+                  className={clsx(
+                    'px-3 py-1.5 rounded-lg text-sm transition-colors capitalize',
+                    filter === f
+                      ? 'bg-cyan-500/20 text-cyan-400'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                  )}
+                >
+                  {f}
+                </button>
+              ))}
             </div>
           </div>
         </header>
@@ -275,9 +221,7 @@ export function DashboardPage({ onOpenProject, onNewProject }: DashboardPageProp
                 >
                   <FileCode className="w-8 h-8 mb-3 text-cyan-400" />
                   <h3 className="text-white font-medium truncate">{project.name}</h3>
-                  <p className="text-xs text-slate-500 mt-1">
-                    {project.language}
-                  </p>
+                  <p className="text-xs text-slate-500 mt-1">{project.language}</p>
                 </button>
               ))}
             </div>
@@ -293,23 +237,13 @@ export function DashboardPage({ onOpenProject, onNewProject }: DashboardPageProp
             <div className="flex items-center gap-1">
               <button
                 onClick={() => setViewMode('grid')}
-                className={clsx(
-                  'p-1.5 rounded',
-                  viewMode === 'grid'
-                    ? 'bg-slate-700 text-white'
-                    : 'text-slate-400 hover:text-white'
-                )}
+                className={clsx('p-1.5 rounded', viewMode === 'grid' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white')}
               >
                 <Grid className="w-4 h-4" />
               </button>
               <button
                 onClick={() => setViewMode('list')}
-                className={clsx(
-                  'p-1.5 rounded',
-                  viewMode === 'list'
-                    ? 'bg-slate-700 text-white'
-                    : 'text-slate-400 hover:text-white'
-                )}
+                className={clsx('p-1.5 rounded', viewMode === 'list' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white')}
               >
                 <List className="w-4 h-4" />
               </button>
@@ -319,22 +253,15 @@ export function DashboardPage({ onOpenProject, onNewProject }: DashboardPageProp
           {loading ? (
             <div className="grid grid-cols-4 gap-4">
               {[...Array(8)].map((_, i) => (
-                <div
-                  key={i}
-                  className="h-40 bg-slate-800 border border-slate-700 rounded-lg animate-pulse"
-                />
+                <div key={i} className="h-40 bg-slate-800 border border-slate-700 rounded-lg animate-pulse" />
               ))}
             </div>
           ) : filteredProjects.length === 0 ? (
             <div className="text-center py-16">
               <Folder className="w-12 h-12 mx-auto text-slate-600 mb-4" />
-              <h3 className="text-lg font-medium text-white mb-2">
-                No projects found
-              </h3>
+              <h3 className="text-lg font-medium text-white mb-2">No projects found</h3>
               <p className="text-slate-400 mb-4">
-                {searchQuery
-                  ? 'Try a different search term'
-                  : 'Create your first project to get started'}
+                {searchQuery ? 'Try a different search term' : 'Create your first project to get started'}
               </p>
               <button
                 onClick={() => setShowNewProjectModal(true)}
@@ -351,22 +278,14 @@ export function DashboardPage({ onOpenProject, onNewProject }: DashboardPageProp
                   key={project.id}
                   className="p-4 bg-slate-800 border border-slate-700 rounded-lg hover:border-cyan-500/50 transition-colors group"
                 >
-                  <button
-                    onClick={() => onOpenProject(project)}
-                    className="w-full text-left"
-                  >
+                  <button onClick={() => onOpenProject(project)} className="w-full text-left">
                     <div className="flex items-start justify-between mb-3">
                       <FileCode className="w-8 h-8 text-cyan-400" />
                       <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleStar(project);
-                        }}
+                        onClick={(e) => { e.stopPropagation(); toggleStar(project); }}
                         className={clsx(
                           'p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity',
-                          project.starred
-                            ? 'text-yellow-400 opacity-100'
-                            : 'text-slate-400 hover:text-yellow-400'
+                          project.starred ? 'text-yellow-400 opacity-100' : 'text-slate-400 hover:text-yellow-400'
                         )}
                       >
                         <StarIcon className="w-4 h-4" fill={project.starred ? 'currentColor' : 'none'} />
@@ -404,10 +323,7 @@ export function DashboardPage({ onOpenProject, onNewProject }: DashboardPageProp
                   className="flex items-center gap-4 px-4 py-3 border-b border-slate-700 last:border-b-0 hover:bg-slate-700/30 transition-colors group"
                 >
                   <FileCode className="w-5 h-5 text-cyan-400" />
-                  <button
-                    onClick={() => onOpenProject(project)}
-                    className="flex-1 text-left"
-                  >
+                  <button onClick={() => onOpenProject(project)} className="flex-1 text-left">
                     <h3 className="text-white font-medium">{project.name}</h3>
                   </button>
                   <span className="text-sm text-slate-400">{project.language}</span>
@@ -418,24 +334,16 @@ export function DashboardPage({ onOpenProject, onNewProject }: DashboardPageProp
                     onClick={() => toggleStar(project)}
                     className={clsx(
                       'p-1 rounded opacity-0 group-hover:opacity-100',
-                      project.starred
-                        ? 'text-yellow-400 opacity-100'
-                        : 'text-slate-400 hover:text-yellow-400'
+                      project.starred ? 'text-yellow-400 opacity-100' : 'text-slate-400 hover:text-yellow-400'
                     )}
                   >
                     <StarIcon className="w-4 h-4" fill={project.starred ? 'currentColor' : 'none'} />
                   </button>
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
-                    <button
-                      onClick={() => duplicateProject(project)}
-                      className="p-1.5 hover:bg-slate-600 rounded text-slate-400 hover:text-white"
-                    >
+                    <button onClick={() => duplicateProject(project)} className="p-1.5 hover:bg-slate-600 rounded text-slate-400 hover:text-white">
                       <Copy className="w-4 h-4" />
                     </button>
-                    <button
-                      onClick={() => deleteProject(project)}
-                      className="p-1.5 hover:bg-slate-600 rounded text-slate-400 hover:text-red-400"
-                    >
+                    <button onClick={() => deleteProject(project)} className="p-1.5 hover:bg-slate-600 rounded text-slate-400 hover:text-red-400">
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
@@ -452,22 +360,19 @@ export function DashboardPage({ onOpenProject, onNewProject }: DashboardPageProp
             <h2 className="text-xl font-bold text-white mb-4">Create New Project</h2>
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">
-                  Project Name
-                </label>
+                <label className="block text-sm font-medium text-slate-300 mb-2">Project Name</label>
                 <input
                   type="text"
                   value={newProjectName}
                   onChange={(e) => setNewProjectName(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && createProject()}
                   placeholder="My Awesome Project"
                   className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
                   autoFocus
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">
-                  Language
-                </label>
+                <label className="block text-sm font-medium text-slate-300 mb-2">Language</label>
                 <select
                   value={newProjectLanguage}
                   onChange={(e) => setNewProjectLanguage(e.target.value)}
@@ -490,10 +395,10 @@ export function DashboardPage({ onOpenProject, onNewProject }: DashboardPageProp
               </button>
               <button
                 onClick={createProject}
-                disabled={!newProjectName.trim()}
+                disabled={!newProjectName.trim() || creating}
                 className="px-4 py-2 bg-cyan-500 text-white rounded-lg hover:bg-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                Create Project
+                {creating ? 'Creating...' : 'Create Project'}
               </button>
             </div>
           </div>
@@ -531,7 +436,6 @@ function getFileTemplate(language: string) {
       content: `import { useState } from 'react';\n\nfunction App() {\n  const [count, setCount] = useState(0);\n\n  return (\n    <div style={{ padding: '2rem', textAlign: 'center' }}>\n      <h1>Hello, React!</h1>\n      <p>Count: {count}</p>\n      <button onClick={() => setCount(count + 1)}>\n        Increment\n      </button>\n    </div>\n  );\n}\n\nexport default App;\n`,
     },
   };
-
   return templates[language] || templates.javascript;
 }
 
