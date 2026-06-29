@@ -225,7 +225,7 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
   ];
 
   return (
-    <div className="h-screen flex flex-col bg-slate-900 overflow-hidden">
+    <div className="h-full flex flex-col bg-slate-900 overflow-hidden">
       <TopBar
         projectName={project.name}
         onMenuToggle={() => setMobileDrawerOpen((v) => !v)}
@@ -402,7 +402,7 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
       </div>
 
       {/* Mobile bottom navigation */}
-      <nav className="flex md:hidden border-t border-slate-700/50 bg-slate-900 shrink-0">
+      <nav className="flex md:hidden border-t border-slate-700/50 bg-slate-900 shrink-0 safe-bottom">
         {mobileNavItems.map(({ id, icon: Icon, label }) => (
           <button
             key={id}
@@ -410,12 +410,19 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
               if (id === 'settings') {
                 setActiveTab('settings');
               } else {
-                setActiveTab(id);
-                setMobileDrawerOpen(true);
+                // Toggle: same tab + drawer open → close; otherwise open
+                if (activeTab === id && mobileDrawerOpen) {
+                  setMobileDrawerOpen(false);
+                } else {
+                  setActiveTab(id);
+                  setMobileDrawerOpen(true);
+                }
               }
             }}
             className={`flex-1 flex flex-col items-center gap-0.5 py-2 transition-colors ${
-              activeTab === id ? 'text-cyan-400' : 'text-slate-400 hover:text-white'
+              activeTab === id && (id === 'settings' || mobileDrawerOpen)
+                ? 'text-cyan-400'
+                : 'text-slate-400 hover:text-white'
             }`}
           >
             <Icon className="w-5 h-5" />
