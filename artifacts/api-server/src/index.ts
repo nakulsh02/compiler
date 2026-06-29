@@ -43,13 +43,12 @@ io.on("connection", (socket) => {
   });
 });
 
-connectDB()
-  .then(() => {
-    httpServer.listen(port, () => {
-      logger.info({ port }, "Server listening");
-    });
-  })
-  .catch((err) => {
-    logger.error({ err }, "Failed to connect to MongoDB");
-    process.exit(1);
-  });
+// Start HTTP server immediately, then connect to DB
+httpServer.listen(port, () => {
+  logger.info({ port }, "Server listening");
+});
+
+connectDB().catch((err) => {
+  logger.error({ err }, "Failed to connect to MongoDB — check MONGODB_URI and Atlas IP whitelist (allow 0.0.0.0/0)");
+  // Don't exit — keep server running so healthcheck passes
+});

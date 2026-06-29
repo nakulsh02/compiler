@@ -11,7 +11,21 @@ export async function connectDB() {
     throw new Error("MONGODB_URI environment variable is required");
   }
 
-  await mongoose.connect(uri);
+  await mongoose.connect(uri, {
+    serverSelectionTimeoutMS: 10000,
+    connectTimeoutMS: 10000,
+    socketTimeoutMS: 45000,
+  });
+
+  mongoose.connection.on("error", (err) => {
+    logger.error({ err }, "MongoDB connection error");
+  });
+
+  mongoose.connection.on("disconnected", () => {
+    logger.warn("MongoDB disconnected");
+    isConnected = false;
+  });
+
   isConnected = true;
   logger.info("Connected to MongoDB");
 }
