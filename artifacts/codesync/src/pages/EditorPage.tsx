@@ -13,6 +13,7 @@ import { ChatPanel } from '../components/ChatPanel';
 import { SearchPanel } from '../components/SearchPanel';
 import { VersionHistory } from '../components/VersionHistory';
 import { SettingsPanel } from '../components/SettingsPanel';
+import { Files, Search, GitBranch, MessageSquare, Settings, X } from 'lucide-react';
 import type { Project, ProjectFile, ChatMessage, Version } from '../types';
 
 const WEB_LANGUAGES = new Set(['html', 'css', 'scss', 'less', 'javascript']);
@@ -35,14 +36,13 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
   const [showPreview, setShowPreview] = useState(false);
   const [leftWidth, setLeftWidth] = useState(250);
   const [isResizing, setIsResizing] = useState(false);
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const fileContentRef = useRef<Map<string, string>>(new Map());
   const socketRef = useRef<Socket | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Derive whether to show preview based on selected file language
-  const isWebFile = selectedFile
-    ? WEB_LANGUAGES.has(selectedFile.language || '')
-    : false;
+  const isWebFile = selectedFile ? WEB_LANGUAGES.has(selectedFile.language || '') : false;
+  const canShowPreview = isWebFile || files.some((f) => WEB_LANGUAGES.has(f.language || ''));
 
   useEffect(() => {
     loadFiles();
@@ -53,10 +53,7 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
     socketRef.current = socket;
     socket.emit('join-project', project.id);
 
-    socket.on('chat-message', (msg: ChatMessage) => {
-      setMessages((prev) => [...prev, msg]);
-    });
-
+    socket.on('chat-message', (msg: ChatMessage) => setMessages((prev) => [...prev, msg]));
     socket.on('file-change', ({ fileId, content }: { fileId: string; content: string }) => {
       setFiles((prev) => prev.map((f) => (f.id === fileId ? { ...f, content } : f)));
       fileContentRef.current.set(fileId, content);
@@ -73,55 +70,38 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
     try {
       const data = await api.files.list(project.id);
       setFiles(data);
-      const mainFile = data.find((f) => f.name === 'index.html' || f.name === 'index.js' || f.name === 'main.py');
-      if (mainFile && !selectedFile) {
-        setSelectedFile(mainFile);
-        setOpenFiles([mainFile]);
-      }
-    } catch (err) {
-      console.error('Failed to load files:', err);
-    }
+      const main = data.find((f) => f.name === 'index.html' || f.name === 'index.js' || f.name === 'main.py');
+      if (main) { setSelectedFile(main); setOpenFiles([main]); }
+    } catch {}
   }
-
-  async function loadMessages() {
-    try {
-      const data = await api.messages.list(project.id);
-      setMessages(data);
-    } catch (err) {
-      console.error('Failed to load messages:', err);
-    }
-  }
-
-  async function loadVersions() {
-    try {
-      const data = await api.versions.list(project.id);
-      setVersions(data);
-    } catch (err) {
-      console.error('Failed to load versions:', err);
-    }
-  }
+  async function loadMessages() { try { setMessages(await api.messages.list(project.id)); } catch {} }
+  async function loadVersions() { try { setVersions(await api.versions.list(project.id)); } catch {} }
 
   const handleSelectFile = useCallback((file: ProjectFile) => {
     if (file.is_folder) return;
     setSelectedFile(file);
-    setOpenFiles((prev) => (prev.find((f) => f.id === file.id) ? prev : [...prev, file]));
+    setOpenFiles((prev) => prev.find((f) => f.id === file.id) ? prev : [...prev, file]);
+    setMobileDrawerOpen(false);
   }, []);
+
+  const closeFile = useCallback((e: React.MouseEvent, fileId: string) => {
+    e.stopPropagation();
+    setOpenFiles((prev) => {
+      const next = prev.filter((f) => f.id !== fileId);
+      if (selectedFile?.id === fileId) setSelectedFile(next[0] || null);
+      return next;
+    });
+  }, [selectedFile]);
 
   const createFile = async (parentId: string | null, name: string, isFolder: boolean) => {
     const parent = parentId ? files.find((f) => f.id === parentId) : null;
     const path = parent ? `${parent.path}/${name}` : `/${name}`;
-    const language = isFolder ? undefined : getLanguageFromFileName(name);
+    const language = isFolder ? undefined : getLang(name);
     try {
-      const file = await api.files.create(project.id, {
-        name, path, is_folder: isFolder, language,
-        parent_id: parentId || undefined,
-        content: isFolder ? undefined : '',
-      });
+      const file = await api.files.create(project.id, { name, path, is_folder: isFolder, language, parent_id: parentId || undefined, content: isFolder ? undefined : '' });
       setFiles((prev) => [...prev, file]);
       if (!isFolder) handleSelectFile(file);
-    } catch (err) {
-      console.error('Failed to create file:', err);
-    }
+    } catch {}
   };
 
   const deleteFile = async (file: ProjectFile) => {
@@ -129,44 +109,33 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
       await api.files.delete(file.id);
       setFiles((prev) => prev.filter((f) => f.id !== file.id));
       setOpenFiles((prev) => prev.filter((f) => f.id !== file.id));
-      if (selectedFile?.id === file.id) {
-        setSelectedFile(openFiles.find((f) => f.id !== file.id) || null);
-      }
-    } catch (err) {
-      console.error('Failed to delete file:', err);
-    }
+      if (selectedFile?.id === file.id) setSelectedFile(openFiles.find((f) => f.id !== file.id) || null);
+    } catch {}
   };
 
   const renameFile = async (file: ProjectFile, newName: string) => {
     const parent = file.parent_id ? files.find((f) => f.id === file.parent_id) : null;
     const path = parent ? `${parent.path}/${newName}` : `/${newName}`;
     try {
-      await api.files.update(file.id, { name: newName, path, language: getLanguageFromFileName(newName) });
-      setFiles((prev) => prev.map((f) => (f.id === file.id ? { ...f, name: newName, path } : f)));
-      setOpenFiles((prev) => prev.map((f) => (f.id === file.id ? { ...f, name: newName, path } : f)));
-    } catch (err) {
-      console.error('Failed to rename file:', err);
-    }
+      await api.files.update(file.id, { name: newName, path, language: getLang(newName) });
+      setFiles((prev) => prev.map((f) => f.id === file.id ? { ...f, name: newName, path } : f));
+      setOpenFiles((prev) => prev.map((f) => f.id === file.id ? { ...f, name: newName, path } : f));
+    } catch {}
   };
 
   const handleContentChange = useCallback((value: string) => {
     if (!selectedFile) return;
     fileContentRef.current.set(selectedFile.id, value);
     setSaveStatus('unsaved');
-
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(async () => {
       setSaveStatus('saving');
       try {
         await api.files.update(selectedFile.id, { content: value });
-        setFiles((prev) => prev.map((f) => (f.id === selectedFile.id ? { ...f, content: value } : f)));
+        setFiles((prev) => prev.map((f) => f.id === selectedFile.id ? { ...f, content: value } : f));
         setSaveStatus('saved');
-        socketRef.current?.emit('file-change', {
-          projectId: project.id, fileId: selectedFile.id, content: value,
-        });
-      } catch {
-        setSaveStatus('unsaved');
-      }
+        socketRef.current?.emit('file-change', { projectId: project.id, fileId: selectedFile.id, content: value });
+      } catch { setSaveStatus('unsaved'); }
     }, 800);
   }, [selectedFile, project.id]);
 
@@ -176,7 +145,7 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     setSaveStatus('saving');
     api.files.update(selectedFile.id, { content })
-      .then(() => { setFiles((prev) => prev.map((f) => (f.id === selectedFile.id ? { ...f, content } : f))); setSaveStatus('saved'); })
+      .then(() => { setFiles((prev) => prev.map((f) => f.id === selectedFile.id ? { ...f, content } : f)); setSaveStatus('saved'); })
       .catch(() => setSaveStatus('unsaved'));
   }, [selectedFile]);
 
@@ -186,34 +155,23 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
       const msg = await api.messages.create(project.id, content);
       setMessages((prev) => [...prev, msg]);
       socketRef.current?.emit('chat-message', { projectId: project.id, message: msg });
-    } catch (err) {
-      console.error('Failed to send message:', err);
-    }
+    } catch {}
   };
 
   const createVersion = async (fileId: string | null, message: string) => {
     if (!user) return;
     try {
-      const version = await api.versions.create(project.id, {
-        file_id: fileId || undefined,
-        content: selectedFile?.content || undefined,
-        message,
-      });
-      setVersions((prev) => [version, ...prev]);
-    } catch (err) {
-      console.error('Failed to create version:', err);
-    }
+      const v = await api.versions.create(project.id, { file_id: fileId || undefined, content: selectedFile?.content, message });
+      setVersions((prev) => [v, ...prev]);
+    } catch {}
   };
 
   const restoreVersion = async (version: Version) => {
-    if (version.file_id && version.content) {
-      try {
-        await api.files.update(version.file_id, { content: version.content });
-        setFiles((prev) => prev.map((f) => (f.id === version.file_id ? { ...f, content: version.content } : f)));
-      } catch (err) {
-        console.error('Failed to restore version:', err);
-      }
-    }
+    if (!version.file_id || !version.content) return;
+    try {
+      await api.files.update(version.file_id, { content: version.content });
+      setFiles((prev) => prev.map((f) => f.id === version.file_id ? { ...f, content: version.content } : f));
+    } catch {}
   };
 
   const getPreviewContent = () => {
@@ -227,141 +185,177 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
     };
   };
 
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    setIsResizing(true);
-  }, []);
-
+  const handleMouseDown = useCallback((e: React.MouseEvent) => { e.preventDefault(); setIsResizing(true); }, []);
   useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isResizing) return;
-      setLeftWidth(Math.max(150, Math.min(400, e.clientX - 56)));
-    };
-    const handleMouseUp = () => setIsResizing(false);
-    if (isResizing) {
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
-    }
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-    };
+    const onMove = (e: MouseEvent) => { if (isResizing) setLeftWidth(Math.max(150, Math.min(400, e.clientX - 56))); };
+    const onUp = () => setIsResizing(false);
+    if (isResizing) { document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp); }
+    return () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
   }, [isResizing]);
 
-  // Get the up-to-date content for the selected file (for Terminal)
   const selectedFileForTerminal = selectedFile
-    ? {
-        name: selectedFile.name,
-        language: selectedFile.language || '',
-        content: fileContentRef.current.get(selectedFile.id) ?? selectedFile.content ?? '',
-      }
+    ? { name: selectedFile.name, language: selectedFile.language || '', content: fileContentRef.current.get(selectedFile.id) ?? selectedFile.content ?? '' }
     : null;
 
   const previewContent = getPreviewContent();
-  const canShowPreview = isWebFile || files.some((f) => WEB_LANGUAGES.has(f.language || ''));
+
+  // Inline panel content — NOT a nested component to avoid React hook rules issues
+  const renderPanelContent = () => {
+    if (activeTab === 'files') return (
+      <FileExplorer files={files} selectedFileId={selectedFile?.id} onSelectFile={handleSelectFile} onCreateFile={createFile} onDeleteFile={deleteFile} onRenameFile={renameFile} />
+    );
+    if (activeTab === 'search') return (
+      <SearchPanel files={files} currentFile={selectedFile?.id} onSelectFile={handleSelectFile} />
+    );
+    if (activeTab === 'git') return (
+      <VersionHistory versions={versions} files={files} onRestoreVersion={restoreVersion} onCreateVersion={createVersion} onViewVersion={(v) => { if (v.file_id) { const f = files.find((fi) => fi.id === v.file_id); if (f) handleSelectFile(f); } }} />
+    );
+    if (activeTab === 'chat') return (
+      <ChatPanel messages={messages} currentUserId={user?.id || ''} onSendMessage={handleSendMessage} />
+    );
+    return null;
+  };
+
+  const mobileNavItems = [
+    { id: 'files' as const, icon: Files, label: 'Files' },
+    { id: 'search' as const, icon: Search, label: 'Search' },
+    { id: 'git' as const, icon: GitBranch, label: 'History' },
+    { id: 'chat' as const, icon: MessageSquare, label: 'Chat' },
+    { id: 'settings' as const, icon: Settings, label: 'Settings' },
+  ];
 
   return (
-    <div className="h-screen flex flex-col bg-slate-900 overflow-hidden select-none">
+    <div className="h-screen flex flex-col bg-slate-900 overflow-hidden">
       <TopBar
         projectName={project.name}
-        onRun={() => {
-          if (canShowPreview) setShowPreview(!showPreview);
-        }}
+        onMenuToggle={() => setMobileDrawerOpen((v) => !v)}
+        onRun={() => { if (canShowPreview) setShowPreview((v) => !v); }}
         onExport={() => {
           const htmlFile = files.find((f) => f.name.endsWith('.html'));
           if (htmlFile?.content) {
             const blob = new Blob([htmlFile.content], { type: 'text/html' });
             const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = htmlFile.name;
-            a.click();
+            const a = document.createElement('a'); a.href = url; a.download = htmlFile.name; a.click();
             URL.revokeObjectURL(url);
           }
         }}
-        onShare={() => {
-          navigator.clipboard.writeText(window.location.href);
-          alert('Project URL copied to clipboard!');
-        }}
+        onShare={() => { navigator.clipboard.writeText(window.location.href); alert('Project URL copied!'); }}
         onSaveStatus={saveStatus}
       />
 
-      <div className="flex-1 flex min-h-0">
-        <Sidebar activeTab={activeTab} onTabChange={setActiveTab} onDashboard={onBackToDashboard} />
-
-        <div style={{ width: leftWidth }} className="min-w-[150px] max-w-[400px] flex flex-col border-r border-slate-700/50 relative">
-          {activeTab === 'files' && (
-            <FileExplorer
-              files={files}
-              selectedFileId={selectedFile?.id}
-              onSelectFile={handleSelectFile}
-              onCreateFile={createFile}
-              onDeleteFile={deleteFile}
-              onRenameFile={renameFile}
-            />
-          )}
-          {activeTab === 'search' && (
-            <SearchPanel files={files} currentFile={selectedFile?.id} onSelectFile={handleSelectFile} />
-          )}
-          {activeTab === 'git' && (
-            <VersionHistory
-              versions={versions}
-              files={files}
-              onRestoreVersion={restoreVersion}
-              onCreateVersion={createVersion}
-              onViewVersion={(v) => {
-                if (v.file_id) {
-                  const file = files.find((f) => f.id === v.file_id);
-                  if (file) handleSelectFile(file);
-                }
-              }}
-            />
-          )}
-          {activeTab === 'chat' && (
-            <ChatPanel messages={messages} currentUserId={user?.id || ''} onSendMessage={handleSendMessage} />
-          )}
-          {activeTab === 'settings' && <SettingsPanel />}
-
-          <div
-            onMouseDown={handleMouseDown}
-            className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize bg-transparent hover:bg-cyan-500/30 transition-colors"
+      <div className="flex-1 flex min-h-0 relative overflow-hidden">
+        {/* Desktop icon sidebar */}
+        <div className="hidden md:flex shrink-0">
+          <Sidebar
+            activeTab={activeTab}
+            onTabChange={(tab) => { setActiveTab(tab); }}
+            onDashboard={onBackToDashboard}
           />
         </div>
 
-        <div className="flex-1 flex flex-col min-w-0">
-          <div className="flex-1 flex min-h-0">
-            <div className={`flex-1 flex flex-col min-w-0 ${showPreview && canShowPreview ? 'max-w-[50%]' : ''}`}>
+        {/* Settings overlay — covers full content area */}
+        {activeTab === 'settings' && (
+          <div className="absolute inset-0 z-30 bg-slate-900 flex flex-col">
+            <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-700/50 bg-slate-800/80 shrink-0">
+              <span className="text-sm font-semibold text-white">Settings</span>
+              <button
+                onClick={() => setActiveTab('files')}
+                className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-slate-700/50 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto">
+              <SettingsPanel />
+            </div>
+          </div>
+        )}
+
+        {/* Mobile drawer backdrop */}
+        {mobileDrawerOpen && (
+          <div
+            className="fixed inset-0 z-20 bg-black/50 md:hidden"
+            onClick={() => setMobileDrawerOpen(false)}
+          />
+        )}
+
+        {/* Desktop left panel */}
+        <div
+          style={{ width: leftWidth }}
+          className="hidden md:flex flex-col border-r border-slate-700/50 relative shrink-0"
+        >
+          {renderPanelContent()}
+          <div
+            onMouseDown={handleMouseDown}
+            className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize bg-transparent hover:bg-cyan-500/30 transition-colors z-10"
+          />
+        </div>
+
+        {/* Mobile drawer */}
+        <div
+          className={`fixed top-0 left-0 h-full w-72 bg-slate-900 border-r border-slate-700/50 z-30 transform transition-transform duration-200 md:hidden flex flex-col ${
+            mobileDrawerOpen ? 'translate-x-0' : '-translate-x-full'
+          }`}
+        >
+          <div className="flex items-center justify-between px-3 py-2.5 border-b border-slate-700/50 bg-slate-800/50 shrink-0">
+            <div className="flex gap-1">
+              {mobileNavItems.slice(0, 4).map(({ id, icon: Icon, label }) => (
+                <button
+                  key={id}
+                  onClick={() => setActiveTab(id)}
+                  className={`p-2 rounded-lg transition-colors ${activeTab === id ? 'bg-cyan-500/20 text-cyan-400' : 'text-slate-400 hover:text-white hover:bg-slate-700/50'}`}
+                  title={label}
+                >
+                  <Icon className="w-4 h-4" />
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setMobileDrawerOpen(false)}
+              className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-slate-700/50"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-auto">
+            {renderPanelContent()}
+          </div>
+        </div>
+
+        {/* Main editor + preview area */}
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+          <div className="flex-1 flex min-h-0 overflow-hidden">
+            {/* Editor column */}
+            <div className={`flex-1 flex flex-col min-w-0 overflow-hidden ${showPreview && canShowPreview ? 'md:max-w-[50%]' : ''}`}>
+              {/* File tabs */}
               {openFiles.length > 0 && (
-                <div className="h-10 flex items-center bg-slate-800/50 border-b border-slate-700/50 overflow-x-auto">
+                <div className="h-10 flex items-center bg-slate-800/50 border-b border-slate-700/50 overflow-x-auto shrink-0">
                   {openFiles.map((file) => (
-                    <button
+                    <div
                       key={file.id}
                       onClick={() => setSelectedFile(file)}
-                      className={`flex items-center gap-2 px-3 py-2 text-sm border-r border-slate-700/50 ${
+                      className={`flex items-center gap-1.5 px-3 py-2 text-sm border-r border-slate-700/50 whitespace-nowrap shrink-0 cursor-pointer select-none ${
                         selectedFile?.id === file.id
                           ? 'bg-slate-900 text-white'
                           : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
                       }`}
                     >
-                      {file.name}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setOpenFiles((prev) => prev.filter((f) => f.id !== file.id));
-                          if (selectedFile?.id === file.id) {
-                            setSelectedFile(openFiles.find((f) => f.id !== file.id) || null);
-                          }
-                        }}
-                        className="hover:text-red-400"
+                      <span className="max-w-[100px] truncate">{file.name}</span>
+                      <span
+                        onClick={(e) => closeFile(e, file.id)}
+                        className="w-4 h-4 flex items-center justify-center rounded hover:text-red-400 text-slate-500 cursor-pointer"
+                        role="button"
+                        aria-label="Close tab"
                       >
-                        <span className="text-xs">&times;</span>
-                      </button>
-                    </button>
+                        <X className="w-3 h-3" />
+                      </span>
+                    </div>
                   ))}
                 </div>
               )}
 
-              <div className="flex-1 min-h-0">
+              {/* Editor */}
+              <div className="flex-1 min-h-0 overflow-hidden">
                 {selectedFile && !selectedFile.is_folder ? (
                   <CodeEditor
                     language={selectedFile.language || 'plaintext'}
@@ -371,7 +365,7 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
                     onCursorChange={setCursorPosition}
                   />
                 ) : (
-                  <div className="h-full flex items-center justify-center text-slate-500">
+                  <div className="h-full flex items-center justify-center text-slate-500 px-4">
                     <div className="text-center">
                       <p className="text-lg mb-2">No file selected</p>
                       <p className="text-sm">Select a file from the explorer to start editing</p>
@@ -381,8 +375,9 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
               </div>
             </div>
 
+            {/* Preview panel — desktop only, web files only */}
             {showPreview && canShowPreview && (
-              <div className="w-[50%] border-l border-slate-700/50">
+              <div className="hidden md:block w-[50%] border-l border-slate-700/50 shrink-0">
                 <Preview
                   html={previewContent.html}
                   css={previewContent.css}
@@ -396,19 +391,45 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
         </div>
       </div>
 
-      <StatusBar
-        line={cursorPosition.lineNumber}
-        column={cursorPosition.column}
-        language={selectedFile?.language || 'plaintext'}
-        connected={true}
-      />
+      {/* Desktop status bar */}
+      <div className="hidden md:block shrink-0">
+        <StatusBar
+          line={cursorPosition.lineNumber}
+          column={cursorPosition.column}
+          language={selectedFile?.language || 'plaintext'}
+          connected={true}
+        />
+      </div>
+
+      {/* Mobile bottom navigation */}
+      <nav className="flex md:hidden border-t border-slate-700/50 bg-slate-900 shrink-0">
+        {mobileNavItems.map(({ id, icon: Icon, label }) => (
+          <button
+            key={id}
+            onClick={() => {
+              if (id === 'settings') {
+                setActiveTab('settings');
+              } else {
+                setActiveTab(id);
+                setMobileDrawerOpen(true);
+              }
+            }}
+            className={`flex-1 flex flex-col items-center gap-0.5 py-2 transition-colors ${
+              activeTab === id ? 'text-cyan-400' : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <Icon className="w-5 h-5" />
+            <span className="text-[10px]">{label}</span>
+          </button>
+        ))}
+      </nav>
     </div>
   );
 }
 
-function getLanguageFromFileName(name: string): string {
+function getLang(name: string): string {
   const ext = name.split('.').pop()?.toLowerCase();
-  const languages: Record<string, string> = {
+  const map: Record<string, string> = {
     js: 'javascript', jsx: 'javascript', ts: 'typescript', tsx: 'typescript',
     py: 'python', java: 'java', c: 'c', cpp: 'cpp', h: 'cpp', hpp: 'cpp',
     cs: 'csharp', go: 'go', rs: 'rust', rb: 'ruby', php: 'php',
@@ -417,5 +438,5 @@ function getLanguageFromFileName(name: string): string {
     yaml: 'yaml', yml: 'yaml', md: 'markdown', sql: 'sql',
     sh: 'shell', bash: 'shell', dockerfile: 'dockerfile',
   };
-  return languages[ext || ''] || 'plaintext';
+  return map[ext || ''] || 'plaintext';
 }
