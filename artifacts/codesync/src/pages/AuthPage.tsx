@@ -40,12 +40,18 @@ export function AuthPage() {
       if (error) {
         setError(error.message);
       } else {
-        setMessage('Account created successfully! Please check your email to verify.');
+        setMessage(`Verification email sent to ${email}. Please click the link in the email to confirm your account, then sign in here.`);
+        setMode('signin');
       }
     } else if (mode === 'signin') {
       const { error } = await signIn(email, password);
       if (error) {
-        setError('Invalid email or password');
+        const msg = error.message?.toLowerCase() ?? '';
+        if (msg.includes('email not confirmed') || msg.includes('not confirmed')) {
+          setError('Please confirm your email first — check your inbox (and spam folder) for the verification link.');
+        } else {
+          setError('Invalid email or password. If you just signed up, please verify your email first.');
+        }
       }
     } else {
       setMessage('If an account exists with this email, you will receive a password reset link.');
