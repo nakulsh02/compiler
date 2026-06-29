@@ -15,6 +15,8 @@ import { VersionHistory } from '../components/VersionHistory';
 import { SettingsPanel } from '../components/SettingsPanel';
 import type { Project, ProjectFile, ChatMessage, Version } from '../types';
 
+const WEB_LANGUAGES = new Set(['html', 'css', 'scss', 'less', 'javascript']);
+
 interface EditorPageProps {
   project: Project;
   onBackToDashboard: () => void;
@@ -30,12 +32,17 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
   const [versions, setVersions] = useState<Version[]>([]);
   const [cursorPosition, setCursorPosition] = useState({ lineNumber: 1, column: 1 });
   const [saveStatus, setSaveStatus] = useState<'saving' | 'saved' | 'unsaved'>('saved');
-  const [showPreview, setShowPreview] = useState(true);
+  const [showPreview, setShowPreview] = useState(false);
   const [leftWidth, setLeftWidth] = useState(250);
   const [isResizing, setIsResizing] = useState(false);
   const fileContentRef = useRef<Map<string, string>>(new Map());
   const socketRef = useRef<Socket | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Derive whether to show preview based on selected file language
+  const isWebFile = selectedFile
+    ? WEB_LANGUAGES.has(selectedFile.language || '')
+    : false;
 
   useEffect(() => {
     loadFiles();
@@ -66,7 +73,7 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
     try {
       const data = await api.files.list(project.id);
       setFiles(data);
-      const mainFile = data.find((f) => f.name === 'index.html' || f.name === 'index.js');
+      const mainFile = data.find((f) => f.name === 'index.html' || f.name === 'index.js' || f.name === 'main.py');
       if (mainFile && !selectedFile) {
         setSelectedFile(mainFile);
         setOpenFiles([mainFile]);
@@ -104,13 +111,9 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
     const parent = parentId ? files.find((f) => f.id === parentId) : null;
     const path = parent ? `${parent.path}/${name}` : `/${name}`;
     const language = isFolder ? undefined : getLanguageFromFileName(name);
-
     try {
       const file = await api.files.create(project.id, {
-        name,
-        path,
-        is_folder: isFolder,
-        language,
+        name, path, is_folder: isFolder, language,
         parent_id: parentId || undefined,
         content: isFolder ? undefined : '',
       });
@@ -137,7 +140,6 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
   const renameFile = async (file: ProjectFile, newName: string) => {
     const parent = file.parent_id ? files.find((f) => f.id === file.parent_id) : null;
     const path = parent ? `${parent.path}/${newName}` : `/${newName}`;
-
     try {
       await api.files.update(file.id, { name: newName, path, language: getLanguageFromFileName(newName) });
       setFiles((prev) => prev.map((f) => (f.id === file.id ? { ...f, name: newName, path } : f)));
@@ -157,15 +159,10 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
       setSaveStatus('saving');
       try {
         await api.files.update(selectedFile.id, { content: value });
-        setFiles((prev) =>
-          prev.map((f) => (f.id === selectedFile.id ? { ...f, content: value } : f))
-        );
+        setFiles((prev) => prev.map((f) => (f.id === selectedFile.id ? { ...f, content: value } : f)));
         setSaveStatus('saved');
-
         socketRef.current?.emit('file-change', {
-          projectId: project.id,
-          fileId: selectedFile.id,
-          content: value,
+          projectId: project.id, fileId: selectedFile.id, content: value,
         });
       } catch {
         setSaveStatus('unsaved');
@@ -178,10 +175,9 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
     const content = fileContentRef.current.get(selectedFile.id) ?? selectedFile.content ?? '';
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     setSaveStatus('saving');
-    api.files.update(selectedFile.id, { content }).then(() => {
-      setFiles((prev) => prev.map((f) => (f.id === selectedFile.id ? { ...f, content } : f)));
-      setSaveStatus('saved');
-    }).catch(() => setSaveStatus('unsaved'));
+    api.files.update(selectedFile.id, { content })
+      .then(() => { setFiles((prev) => prev.map((f) => (f.id === selectedFile.id ? { ...f, content } : f))); setSaveStatus('saved'); })
+      .catch(() => setSaveStatus('unsaved'));
   }, [selectedFile]);
 
   const handleSendMessage = async (content: string) => {
@@ -213,9 +209,7 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
     if (version.file_id && version.content) {
       try {
         await api.files.update(version.file_id, { content: version.content });
-        setFiles((prev) =>
-          prev.map((f) => (f.id === version.file_id ? { ...f, content: version.content } : f))
-        );
+        setFiles((prev) => prev.map((f) => (f.id === version.file_id ? { ...f, content: version.content } : f)));
       } catch (err) {
         console.error('Failed to restore version:', err);
       }
@@ -226,9 +220,8 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
     const htmlFile = files.find((f) => f.name.endsWith('.html'));
     const cssFiles = files.filter((f) => f.name.endsWith('.css') || f.name.endsWith('.scss'));
     const jsFiles = files.filter((f) => f.name.endsWith('.js') || f.name.endsWith('.jsx'));
-
     return {
-      html: htmlFile?.content || '<h1>No HTML file found</h1><p>Create an index.html file to see preview</p>',
+      html: htmlFile?.content || '<p>Create an index.html file to see preview</p>',
       css: cssFiles.map((f) => f.content || '').join('\n'),
       javascript: jsFiles.map((f) => f.content || '').join('\n'),
     };
@@ -245,7 +238,6 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
       setLeftWidth(Math.max(150, Math.min(400, e.clientX - 56)));
     };
     const handleMouseUp = () => setIsResizing(false);
-
     if (isResizing) {
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
@@ -256,13 +248,25 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
     };
   }, [isResizing]);
 
+  // Get the up-to-date content for the selected file (for Terminal)
+  const selectedFileForTerminal = selectedFile
+    ? {
+        name: selectedFile.name,
+        language: selectedFile.language || '',
+        content: fileContentRef.current.get(selectedFile.id) ?? selectedFile.content ?? '',
+      }
+    : null;
+
   const previewContent = getPreviewContent();
+  const canShowPreview = isWebFile || files.some((f) => WEB_LANGUAGES.has(f.language || ''));
 
   return (
     <div className="h-screen flex flex-col bg-slate-900 overflow-hidden select-none">
       <TopBar
         projectName={project.name}
-        onRun={() => setShowPreview(!showPreview)}
+        onRun={() => {
+          if (canShowPreview) setShowPreview(!showPreview);
+        }}
         onExport={() => {
           const htmlFile = files.find((f) => f.name.endsWith('.html'));
           if (htmlFile?.content) {
@@ -314,11 +318,7 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
             />
           )}
           {activeTab === 'chat' && (
-            <ChatPanel
-              messages={messages}
-              currentUserId={user?.id || ''}
-              onSendMessage={handleSendMessage}
-            />
+            <ChatPanel messages={messages} currentUserId={user?.id || ''} onSendMessage={handleSendMessage} />
           )}
           {activeTab === 'settings' && <SettingsPanel />}
 
@@ -330,7 +330,7 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
 
         <div className="flex-1 flex flex-col min-w-0">
           <div className="flex-1 flex min-h-0">
-            <div className={`flex-1 flex flex-col min-w-0 ${showPreview ? 'max-w-[50%]' : ''}`}>
+            <div className={`flex-1 flex flex-col min-w-0 ${showPreview && canShowPreview ? 'max-w-[50%]' : ''}`}>
               {openFiles.length > 0 && (
                 <div className="h-10 flex items-center bg-slate-800/50 border-b border-slate-700/50 overflow-x-auto">
                   {openFiles.map((file) => (
@@ -381,14 +381,18 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
               </div>
             </div>
 
-            {showPreview && (
+            {showPreview && canShowPreview && (
               <div className="w-[50%] border-l border-slate-700/50">
-                <Preview html={previewContent.html} css={previewContent.css} javascript={previewContent.javascript} />
+                <Preview
+                  html={previewContent.html}
+                  css={previewContent.css}
+                  javascript={previewContent.javascript}
+                />
               </div>
             )}
           </div>
 
-          <Terminal />
+          <Terminal currentFile={selectedFileForTerminal} />
         </div>
       </div>
 

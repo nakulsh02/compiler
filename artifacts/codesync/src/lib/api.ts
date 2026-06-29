@@ -103,4 +103,10 @@ export const api = {
         body: JSON.stringify(data),
       }),
   },
+
+  execute: (language: string, code: string) =>
+    request<{ output: string; error: boolean }>("/execute", {
+      method: "POST",
+      body: JSON.stringify({ language, code }),
+    }),
 };

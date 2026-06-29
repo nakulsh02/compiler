@@ -5,6 +5,7 @@ import projectsRouter from "./projects";
 import filesRouter from "./files";
 import messagesRouter from "./messages";
 import versionsRouter from "./versions";
+import executeRouter from "./execute";
 
 const router: IRouter = Router();
 
@@ -14,5 +15,6 @@ router.use(projectsRouter);
 router.use(filesRouter);
 router.use(messagesRouter);
 router.use(versionsRouter);
+router.use(executeRouter);
 
 export default router;
