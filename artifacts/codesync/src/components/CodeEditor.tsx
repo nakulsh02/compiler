@@ -119,14 +119,13 @@ export function CodeEditor({
       run: () => ed.getAction('editor.action.formatDocument')?.run(),
     });
 
-    // --- Intercept native paste (Ctrl+V) to normalize line endings ---
+    // --- Attach native DOM events (paste + contextmenu) ---
     const domNode = ed.getDomNode();
     if (domNode) {
+      // Intercept Ctrl+V to normalize Windows line endings
       domNode.addEventListener('paste', (e: ClipboardEvent) => {
         const raw = e.clipboardData?.getData('text/plain');
-        if (!raw) return;
-        // Only intercept if it has \r (Windows line endings)
-        if (!raw.includes('\r')) return;
+        if (!raw || !raw.includes('\r')) return;
         e.preventDefault();
         e.stopPropagation();
         const normalized = normalizeText(raw);
@@ -136,27 +135,30 @@ export function CodeEditor({
           ed.pushUndoStop();
         }
       }, true);
+
+      // Custom right-click context menu — use native event for precise coords
+      domNode.addEventListener('contextmenu', (ev: MouseEvent) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const sel = ed.getSelection();
+        const hasSelection = !!(sel && !sel.isEmpty());
+
+        const clickX = ev.clientX;
+        const clickY = ev.clientY;
+
+        // Clamp within the editor's own bounding box (not full viewport)
+        const editorBottom = domNode.getBoundingClientRect().bottom;
+
+        // Show above click if not enough space between click and editor bottom
+        const showAbove = clickY + MENU_H > editorBottom - 8;
+        const y = showAbove ? clickY - MENU_H : clickY;
+
+        // Show left of click if would overflow viewport right edge
+        const x = clickX + MENU_W > window.innerWidth ? clickX - MENU_W : clickX;
+
+        setContextMenu({ x: Math.max(4, x), y: Math.max(4, y), hasSelection, showAbove });
+      });
     }
-
-    // --- Custom right-click context menu ---
-    ed.onContextMenu((e) => {
-      const ev = e.event.browserEvent;
-      ev.preventDefault();
-      ev.stopPropagation();
-      const sel = ed.getSelection();
-      const hasSelection = !!(sel && !sel.isEmpty());
-
-      const clickX = ev.clientX;
-      const clickY = ev.clientY;
-
-      // Decide: show below click OR above if not enough space below
-      const showAbove = clickY + MENU_H > window.innerHeight - 20;
-      // Decide: show right of click OR to the left if overflows
-      const x = clickX + MENU_W > window.innerWidth ? clickX - MENU_W : clickX;
-      const y = showAbove ? clickY - MENU_H : clickY;
-
-      setContextMenu({ x: Math.max(4, x), y: Math.max(4, y), hasSelection, showAbove });
-    });
 
     ed.updateOptions({ fontSize, wordWrap, minimap: { enabled: minimapEnabled }, lineNumbers });
   }, [fontSize, wordWrap, minimapEnabled, lineNumbers, onCursorChange, onSave]);

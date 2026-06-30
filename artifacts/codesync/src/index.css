@@ -28,6 +28,15 @@ body {
   scrollbar-color: rgba(100, 116, 139, 0.5) transparent;
 }
 
+/* Hide scrollbar for filter chips row on mobile */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 *::-webkit-scrollbar {
   width: 8px;
   height: 8px;
