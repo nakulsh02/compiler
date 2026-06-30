@@ -74,9 +74,10 @@ export function Terminal({ currentFile }: TerminalProps) {
       appendOutput([
         { text: 'Available commands:', type: 'info' },
         { text: '  run              - Run the currently open file', type: 'default' },
-        { text: '  python <file>    - Run a Python file (uses current file content)', type: 'default' },
-        { text: '  python3 <file>   - Same as python', type: 'default' },
-        { text: '  node <file>      - Run a JavaScript file', type: 'default' },
+        { text: '  Supported: Python · JavaScript · TypeScript · C · C++ · Java', type: 'info' },
+        { text: '  python <file>    - Run Python file', type: 'default' },
+        { text: '  node <file>      - Run JavaScript file', type: 'default' },
+        { text: '  ts-node <file>   - Run TypeScript file', type: 'default' },
         { text: '  clear            - Clear terminal', type: 'default' },
         { text: '  ls               - List files', type: 'default' },
         { text: '  pwd              - Print working directory', type: 'default' },
@@ -119,17 +120,20 @@ export function Terminal({ currentFile }: TerminalProps) {
       return;
     }
 
-    // run / python / python3 / node commands — real execution
-    const isRun = cmdLower === 'run';
+    // run / language-specific commands — real execution
+    const SUPPORTED = new Set(['python', 'javascript', 'typescript', 'c', 'cpp', 'java']);
+    const isRun    = cmdLower === 'run';
     const isPython = cmdLower.startsWith('python3 ') || cmdLower.startsWith('python ');
-    const isNode = cmdLower.startsWith('node ');
+    const isNode   = cmdLower.startsWith('node ');
+    const isTs     = cmdLower.startsWith('ts-node ') || cmdLower.startsWith('tsx ');
 
-    if (isRun || isPython || isNode) {
+    if (isRun || isPython || isNode || isTs) {
       let language = currentFile?.language || 'python';
       let code = currentFile?.content || '';
 
       if (isPython) language = 'python';
-      if (isNode) language = 'javascript';
+      if (isNode)   language = 'javascript';
+      if (isTs)     language = 'typescript';
 
       if (!code.trim()) {
         appendOutput([
@@ -139,16 +143,21 @@ export function Terminal({ currentFile }: TerminalProps) {
         return;
       }
 
-      if (!['python', 'javascript'].includes(language)) {
+      if (!SUPPORTED.has(language)) {
         appendOutput([
-          { text: `Cannot run "${language}" files. Only Python and JavaScript are supported.`, type: 'error' },
+          { text: `Cannot run "${language}" files directly.`, type: 'error' },
+          { text: 'Supported: Python, JavaScript, TypeScript, C, C++, Java', type: 'info' },
           { text: '', type: 'default' },
         ]);
         return;
       }
 
       setIsRunning(true);
-      appendOutput([{ text: `Running ${currentFile?.name || 'file'}...`, type: 'info' }]);
+      const langLabel: Record<string, string> = {
+        python: 'Python', javascript: 'JavaScript', typescript: 'TypeScript',
+        c: 'C', cpp: 'C++', java: 'Java',
+      };
+      appendOutput([{ text: `▶ Running ${currentFile?.name || 'file'} (${langLabel[language] || language})...`, type: 'info' }]);
 
       try {
         const result = await api.execute(language, code);

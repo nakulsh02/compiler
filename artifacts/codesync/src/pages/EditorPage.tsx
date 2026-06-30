@@ -376,15 +376,37 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
               </div>
             </div>
 
-            {/* Preview panel — desktop only, web files only */}
+            {/* Preview panel — works on all screen sizes */}
             {showPreview && canShowPreview && (
-              <div className="hidden md:block w-[50%] border-l border-slate-700/50 shrink-0">
-                <Preview
-                  html={previewContent.html}
-                  css={previewContent.css}
-                  javascript={previewContent.javascript}
-                />
-              </div>
+              <>
+                {/* Mobile: full-screen overlay */}
+                <div className="md:hidden fixed inset-0 z-40 flex flex-col bg-slate-900">
+                  <div className="flex items-center justify-between px-4 py-2 border-b border-slate-700/50 bg-slate-800 shrink-0">
+                    <span className="text-sm font-medium text-white">HTML Preview</span>
+                    <button
+                      onClick={() => setShowPreview(false)}
+                      className="px-3 py-1 text-xs text-slate-400 hover:text-white bg-slate-700/50 hover:bg-slate-700 rounded-lg transition-colors"
+                    >
+                      Close
+                    </button>
+                  </div>
+                  <div className="flex-1 min-h-0">
+                    <Preview
+                      html={previewContent.html}
+                      css={previewContent.css}
+                      javascript={previewContent.javascript}
+                    />
+                  </div>
+                </div>
+                {/* Desktop: side panel */}
+                <div className="hidden md:block w-[50%] border-l border-slate-700/50 shrink-0">
+                  <Preview
+                    html={previewContent.html}
+                    css={previewContent.css}
+                    javascript={previewContent.javascript}
+                  />
+                </div>
+              </>
             )}
           </div>
 
