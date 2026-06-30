@@ -29,6 +29,7 @@ export interface ProjectFile {
   content?: string;
   language?: string;
   is_folder: boolean;
+  is_main?: boolean;
   parent_id?: string;
   created_at: string;
   updated_at: string;

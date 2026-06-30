@@ -1,0 +1,10 @@
+[
+  {
+    "email": "test@test.com",
+    "password": "$2b$12$JsHqI2X.0zkubVlAlPmjsOBaYSDJEyePDZQl7lv282twkZb.q.Xn.",
+    "display_name": "Test User",
+    "id": "4372947d-89a7-4451-9c49-205fd783fa8f",
+    "createdAt": "2026-06-30T07:11:42.317Z",
+    "updatedAt": "2026-06-30T07:11:42.317Z"
+  }
+]

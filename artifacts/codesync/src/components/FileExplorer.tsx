@@ -37,6 +37,7 @@ interface FileTreeItemProps {
   onRenameFile: (file: ProjectFile, newName: string) => void;
   expandedFolders: Set<string>;
   onToggleFolder: (id: string) => void;
+  mainFileId?: string;
 }
 
 function getFileIcon(filename: string) {
@@ -71,7 +72,9 @@ function FileTreeItem({
   onRenameFile,
   expandedFolders,
   onToggleFolder,
+  mainFileId,
 }: FileTreeItemProps) {
+  const isMain = file.id === mainFileId || file.is_main;
   const [showMenu, setShowMenu] = useState(false);
   const [showNewFile, setShowNewFile] = useState(false);
   const [showNewFolder, setShowNewFolder] = useState(false);
@@ -121,27 +124,33 @@ function FileTreeItem({
         <File className={clsx('w-4 h-4 shrink-0', getFileIcon(file.name))} />
         <span className="truncate text-sm">{file.name}</span>
         <div className="ml-auto opacity-0 group-hover:opacity-100 flex items-center gap-0.5">
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setShowRename(true);
-              setNewName(file.name);
-            }}
-            className="p-0.5 hover:bg-slate-600 rounded"
-          >
-            <Edit3 className="w-3 h-3" />
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onDeleteFile(file);
-            }}
-            className="p-0.5 hover:bg-slate-600 rounded text-red-400"
-          >
-            <Trash2 className="w-3 h-3" />
-          </button>
+          {!isMain && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowRename(true);
+                setNewName(file.name);
+              }}
+              className="p-0.5 hover:bg-slate-600 rounded"
+            >
+              <Edit3 className="w-3 h-3" />
+            </button>
+          )}
+          {isMain ? (
+            <span className="px-1 text-[9px] text-cyan-500/70 font-medium select-none" title="Main file — cannot be deleted">MAIN</span>
+          ) : (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onDeleteFile(file);
+              }}
+              className="p-0.5 hover:bg-slate-600 rounded text-red-400"
+            >
+              <Trash2 className="w-3 h-3" />
+            </button>
+          )}
         </div>
-        {showRename && (
+        {showRename && !isMain && (
           <input
             type="text"
             value={newName}
@@ -288,6 +297,7 @@ function FileTreeItem({
                 onRenameFile={onRenameFile}
                 expandedFolders={expandedFolders}
                 onToggleFolder={onToggleFolder}
+                mainFileId={mainFileId}
               />
             ))}
         </div>
@@ -304,6 +314,7 @@ export function FileExplorer({
   onDeleteFile,
   onRenameFile,
 }: FileExplorerProps) {
+  const mainFileId = useMemo(() => files.find((f) => f.is_main)?.id, [files]);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   const [showNewFile, setShowNewFile] = useState(false);
   const [showNewFolder, setShowNewFolder] = useState(false);
@@ -422,6 +433,7 @@ export function FileExplorer({
               onRenameFile={onRenameFile}
               expandedFolders={expandedFolders}
               onToggleFolder={toggleFolder}
+              mainFileId={mainFileId}
             />
           ))}
       </div>

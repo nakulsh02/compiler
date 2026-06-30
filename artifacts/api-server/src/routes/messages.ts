@@ -1,50 +1,59 @@
 import { Router } from "express";
 import { authMiddleware, type AuthRequest } from "../middlewares/auth";
-import { ChatMessage } from "../models/ChatMessage";
-import { User } from "../models/User";
+import { findAll, findById, insertOne } from "../lib/filedb";
 
 const router = Router();
 router.use(authMiddleware);
 
-async function messageToJSON(m: InstanceType<typeof ChatMessage>) {
-  const user = await User.findById(m.user_id).lean();
+interface MessageRecord {
+  id: string;
+  project_id: string;
+  user_id: string;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface UserRecord {
+  id: string;
+  email: string;
+  display_name: string;
+  avatar_url?: string;
+}
+
+function messageToJSON(m: MessageRecord) {
+  const user = findById<UserRecord>("users", m.user_id);
   return {
-    id: m._id.toString(),
-    project_id: m.project_id.toString(),
-    user_id: m.user_id.toString(),
+    id: m.id,
+    project_id: m.project_id,
+    user_id: m.user_id,
     content: m.content,
-    created_at: m.createdAt.toISOString(),
+    created_at: m.createdAt,
     user: user
-      ? {
-          id: user._id.toString(),
-          email: user.email,
-          display_name: user.display_name,
-          avatar_url: user.avatar_url,
-        }
+      ? { id: user.id, email: user.email, display_name: user.display_name, avatar_url: user.avatar_url }
       : undefined,
   };
 }
 
-router.get("/projects/:projectId/messages", async (req: AuthRequest, res) => {
+router.get("/projects/:projectId/messages", (req: AuthRequest, res) => {
   try {
-    const messages = await ChatMessage.find({ project_id: req.params.projectId }).sort({ createdAt: 1 });
-    const json = await Promise.all(messages.map(messageToJSON));
-    res.json(json);
+    const messages = findAll<MessageRecord>("messages", { project_id: req.params.projectId });
+    messages.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    res.json(messages.map(messageToJSON));
   } catch {
     res.status(500).json({ error: "Server error" });
   }
 });
 
-router.post("/projects/:projectId/messages", async (req: AuthRequest, res) => {
+router.post("/projects/:projectId/messages", (req: AuthRequest, res) => {
   try {
     const { content } = req.body;
-    const msg = await ChatMessage.create({
+    const msg = insertOne<MessageRecord>("messages", {
       project_id: req.params.projectId,
-      user_id: req.userId,
+      user_id: req.userId!,
       content,
     });
-    const json = await messageToJSON(msg);
-    res.json(json);
+    res.json(messageToJSON(msg));
   } catch {
     res.status(500).json({ error: "Server error" });
   }

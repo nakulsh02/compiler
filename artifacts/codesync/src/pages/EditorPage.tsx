@@ -70,7 +70,7 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
     try {
       const data = await api.files.list(project.id);
       setFiles(data);
-      const main = data.find((f) => f.name === 'index.html' || f.name === 'index.js' || f.name === 'main.py');
+      const main = data.find((f) => f.is_main) || data.find((f) => !f.is_folder);
       if (main) { setSelectedFile(main); setOpenFiles([main]); }
     } catch {}
   }
@@ -87,6 +87,9 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
   const closeFile = useCallback((e: React.MouseEvent, fileId: string) => {
     e.stopPropagation();
     setOpenFiles((prev) => {
+      const fileToClose = prev.find((f) => f.id === fileId);
+      if (fileToClose?.is_main) return prev;
+      if (prev.length === 1) return prev;
       const next = prev.filter((f) => f.id !== fileId);
       if (selectedFile?.id === fileId) setSelectedFile(next[0] || null);
       return next;
@@ -105,11 +108,15 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
   };
 
   const deleteFile = async (file: ProjectFile) => {
+    if (file.is_main) return;
     try {
       await api.files.delete(file.id);
       setFiles((prev) => prev.filter((f) => f.id !== file.id));
-      setOpenFiles((prev) => prev.filter((f) => f.id !== file.id));
-      if (selectedFile?.id === file.id) setSelectedFile(openFiles.find((f) => f.id !== file.id) || null);
+      setOpenFiles((prev) => {
+        const next = prev.filter((f) => f.id !== file.id);
+        if (selectedFile?.id === file.id) setSelectedFile(next[0] || null);
+        return next;
+      });
     } catch {}
   };
 
@@ -342,14 +349,18 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
                       }`}
                     >
                       <span className="max-w-[100px] truncate">{file.name}</span>
-                      <span
-                        onClick={(e) => closeFile(e, file.id)}
-                        className="w-4 h-4 flex items-center justify-center rounded hover:text-red-400 text-slate-500 cursor-pointer"
-                        role="button"
-                        aria-label="Close tab"
-                      >
-                        <X className="w-3 h-3" />
-                      </span>
+                      {file.is_main ? (
+                        <span className="text-[9px] text-cyan-500/60 font-medium select-none ml-0.5">●</span>
+                      ) : (
+                        <span
+                          onClick={(e) => closeFile(e, file.id)}
+                          className="w-4 h-4 flex items-center justify-center rounded hover:text-red-400 text-slate-500 cursor-pointer"
+                          role="button"
+                          aria-label="Close tab"
+                        >
+                          <X className="w-3 h-3" />
+                        </span>
+                      )}
                     </div>
                   ))}
                 </div>

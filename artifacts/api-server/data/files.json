@@ -1,0 +1,14 @@
+[
+  {
+    "project_id": "cad44977-539b-4ba9-8db6-181b4e893291",
+    "name": "main.cpp",
+    "path": "/main.cpp",
+    "content": "#include <iostream>\nusing namespace std;\n\nint main() {\n    cout << \"Hello, World!\" << endl;\n    return 0;\n}\n",
+    "language": "cpp",
+    "is_folder": false,
+    "is_main": true,
+    "id": "2ae390f2-887f-4833-9adb-f553cc6d1f6a",
+    "createdAt": "2026-06-30T07:11:58.656Z",
+    "updatedAt": "2026-06-30T07:11:58.656Z"
+  }
+]

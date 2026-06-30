@@ -2,7 +2,6 @@ import { createServer } from "node:http";
 import { Server as SocketIOServer } from "socket.io";
 import app from "./app";
 import { logger } from "./lib/logger";
-import { connectDB } from "./lib/db";
 
 const rawPort = process.env["PORT"];
 
@@ -43,12 +42,6 @@ io.on("connection", (socket) => {
   });
 });
 
-// Start HTTP server immediately, then connect to DB
 httpServer.listen(port, () => {
   logger.info({ port }, "Server listening");
-});
-
-connectDB().catch((err) => {
-  logger.error({ err }, "Failed to connect to MongoDB — check MONGODB_URI and Atlas IP whitelist (allow 0.0.0.0/0)");
-  // Don't exit — keep server running so healthcheck passes
 });
