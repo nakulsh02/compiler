@@ -1,17 +1,12 @@
 import { useState } from 'react';
 import {
-  Play,
-  Download,
-  Share2,
-  MoreVertical,
-  FileCode,
-  Clock,
-  Menu,
+  Play, Download, Share2, MoreVertical, FileCode, Clock, Menu, ArrowLeft,
 } from 'lucide-react';
 
 interface TopBarProps {
   projectName: string;
   onMenuToggle: () => void;
+  onDashboard: () => void;
   onRun: () => void;
   onExport: () => void;
   onShare: () => void;
@@ -20,29 +15,35 @@ interface TopBarProps {
 }
 
 export function TopBar({
-  projectName,
-  onMenuToggle,
-  onRun,
-  onExport,
-  onShare,
-  participants = [],
-  onSaveStatus = 'saved',
+  projectName, onMenuToggle, onDashboard, onRun, onExport, onShare,
+  participants = [], onSaveStatus = 'saved',
 }: TopBarProps) {
   const [showMenu, setShowMenu] = useState(false);
 
   return (
     <div className="h-12 bg-slate-800 border-b border-slate-700/50 flex items-center justify-between px-3 shrink-0">
-      <div className="flex items-center gap-2 min-w-0">
-        {/* Hamburger — mobile only */}
+      <div className="flex items-center gap-1.5 min-w-0">
+
+        {/* Mobile: back arrow → Projects */}
+        <button
+          onClick={onDashboard}
+          className="md:hidden w-8 h-8 rounded-md flex items-center justify-center text-slate-400 hover:text-white hover:bg-slate-700/50 transition-colors shrink-0"
+          title="Back to Projects"
+        >
+          <ArrowLeft className="w-4 h-4" />
+        </button>
+
+        {/* Mobile: hamburger to open file drawer */}
         <button
           onClick={onMenuToggle}
           className="md:hidden w-8 h-8 rounded-md flex items-center justify-center text-slate-400 hover:text-white hover:bg-slate-700/50 transition-colors shrink-0"
+          title="Open Panel"
         >
           <Menu className="w-5 h-5" />
         </button>
 
-        <FileCode className="w-4 h-4 text-cyan-400 shrink-0" />
-        <h1 className="text-sm font-medium text-white truncate max-w-[120px] sm:max-w-none">{projectName}</h1>
+        <FileCode className="hidden md:block w-4 h-4 text-cyan-400 shrink-0" />
+        <h1 className="text-sm font-medium text-white truncate max-w-[100px] sm:max-w-xs">{projectName}</h1>
 
         <div className="hidden sm:flex items-center gap-1 text-xs text-slate-500 shrink-0">
           <Clock className="w-3 h-3" />
@@ -67,11 +68,6 @@ export function TopBar({
                 {p.name.charAt(0).toUpperCase()}
               </div>
             ))}
-            {participants.length > 3 && (
-              <div className="w-6 h-6 rounded-full border-2 border-slate-800 bg-slate-700 flex items-center justify-center text-xs font-medium text-slate-300">
-                +{participants.length - 3}
-              </div>
-            )}
           </div>
         )}
 
@@ -102,17 +98,25 @@ export function TopBar({
           {showMenu && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setShowMenu(false)} />
-              <div className="absolute right-0 top-full mt-2 w-48 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 overflow-hidden">
+              <div className="absolute right-0 top-full mt-2 w-52 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-50 overflow-hidden py-1">
+                {/* Back to Projects — mobile only */}
+                <button
+                  onClick={() => { setShowMenu(false); onDashboard(); }}
+                  className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700/50 transition-colors md:hidden"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                  Back to Projects
+                </button>
                 <button
                   onClick={() => { setShowMenu(false); onShare(); }}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-300 hover:bg-slate-700/50 transition-colors sm:hidden"
+                  className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700/50 transition-colors sm:hidden"
                 >
                   <Share2 className="w-4 h-4" />
                   Share
                 </button>
                 <button
                   onClick={() => { setShowMenu(false); onExport(); }}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-300 hover:bg-slate-700/50 transition-colors"
+                  className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-slate-300 hover:bg-slate-700/50 transition-colors"
                 >
                   <Download className="w-4 h-4" />
                   Download Project

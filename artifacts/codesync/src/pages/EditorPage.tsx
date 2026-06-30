@@ -229,6 +229,7 @@ export function EditorPage({ project, onBackToDashboard }: EditorPageProps) {
       <TopBar
         projectName={project.name}
         onMenuToggle={() => setMobileDrawerOpen((v) => !v)}
+        onDashboard={onBackToDashboard}
         onRun={() => { if (canShowPreview) setShowPreview((v) => !v); }}
         onExport={() => {
           const htmlFile = files.find((f) => f.name.endsWith('.html'));

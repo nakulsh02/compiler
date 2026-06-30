@@ -2,17 +2,8 @@ import { useRef, useCallback, useEffect, useState } from 'react';
 import Editor, { OnMount, OnChange } from '@monaco-editor/react';
 import type { editor } from 'monaco-editor';
 import {
-  Settings,
-  ZoomIn,
-  ZoomOut,
-  RotateCcw,
-  Copy,
-  Clipboard,
-  Scissors,
-  FileText,
-  Search,
-  AlignLeft,
-  CheckSquare,
+  Settings, ZoomIn, ZoomOut, RotateCcw,
+  Copy, Clipboard, Scissors, FileText, Search, AlignLeft, CheckSquare,
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -23,18 +14,14 @@ interface CodeEditorProps {
   onSave?: () => void;
   onCursorChange?: (position: { lineNumber: number; column: number }) => void;
   readOnly?: boolean;
-  collaborators?: Array<{
-    id: string;
-    name: string;
-    color: string;
-    selection?: { start: number; end: number };
-  }>;
+  collaborators?: Array<{ id: string; name: string; color: string; selection?: { start: number; end: number } }>;
 }
 
 interface ContextMenuState {
   x: number;
   y: number;
   hasSelection: boolean;
+  showAbove: boolean;
 }
 
 const languageMap: Record<string, string> = {
@@ -46,153 +33,193 @@ const languageMap: Record<string, string> = {
   shell: 'shell', dockerfile: 'dockerfile',
 };
 
+const MENU_H = 295; // approximate menu height in px
+const MENU_W = 210;
+
+// ---- Clipboard helpers with fallbacks ----
+async function writeClipboard(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // execCommand fallback
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  }
+}
+
+async function readClipboard(): Promise<string> {
+  try {
+    return await navigator.clipboard.readText();
+  } catch {
+    // Fallback: show a prompt as last resort
+    return '';
+  }
+}
+
+function normalizeText(text: string) {
+  return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
 export function CodeEditor({
-  language, value, onChange, onSave, onCursorChange, readOnly = false, collaborators = [],
+  language, value, onChange, onSave, onCursorChange, readOnly = false,
 }: CodeEditorProps) {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof import('monaco-editor') | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
   const [fontSize, setFontSize] = useState(14);
   const [wordWrap, setWordWrap] = useState<'off' | 'on'>('on');
   const [minimapEnabled, setMinimapEnabled] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [lineNumbers, setLineNumbers] = useState<'on' | 'off' | 'relative'>('on');
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
-  const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
 
-  // Close context menu on outside click / scroll
+  // Close context menu on outside click / Escape
   useEffect(() => {
     if (!contextMenu) return;
-    const close = () => setContextMenu(null);
+    const close = (e: MouseEvent | KeyboardEvent) => {
+      if (e instanceof KeyboardEvent && e.key !== 'Escape') return;
+      setContextMenu(null);
+    };
     document.addEventListener('mousedown', close);
     document.addEventListener('keydown', close);
-    document.addEventListener('scroll', close, true);
     return () => {
       document.removeEventListener('mousedown', close);
       document.removeEventListener('keydown', close);
-      document.removeEventListener('scroll', close, true);
     };
   }, [contextMenu]);
 
-  const handleEditorMount: OnMount = useCallback((editor, monaco) => {
-    editorRef.current = editor;
+  const toast = (msg: string) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(null), 1600);
+  };
+
+  const handleEditorMount: OnMount = useCallback((ed, monaco) => {
+    editorRef.current = ed;
     monacoRef.current = monaco;
 
-    editor.onDidChangeCursorPosition((e) => {
+    ed.onDidChangeCursorPosition((e) => {
       onCursorChange?.({ lineNumber: e.position.lineNumber, column: e.position.column });
     });
 
-    // Keyboard shortcuts
-    editor.addAction({
-      id: 'save-file',
-      label: 'Save File',
+    ed.addAction({
+      id: 'save-file', label: 'Save File',
       keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS],
       run: () => onSave?.(),
     });
-    editor.addAction({
-      id: 'format-document',
-      label: 'Format Document',
+    ed.addAction({
+      id: 'format-document', label: 'Format Document',
       keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF],
-      run: () => editor.getAction('editor.action.formatDocument')?.run(),
+      run: () => ed.getAction('editor.action.formatDocument')?.run(),
     });
 
-    // Intercept right-click to show custom context menu
-    editor.onContextMenu((e) => {
-      const nativeEvent = e.event.browserEvent;
-      nativeEvent.preventDefault();
-      nativeEvent.stopPropagation();
-      const sel = editor.getSelection();
+    // --- Intercept native paste (Ctrl+V) to normalize line endings ---
+    const domNode = ed.getDomNode();
+    if (domNode) {
+      domNode.addEventListener('paste', (e: ClipboardEvent) => {
+        const raw = e.clipboardData?.getData('text/plain');
+        if (!raw) return;
+        // Only intercept if it has \r (Windows line endings)
+        if (!raw.includes('\r')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const normalized = normalizeText(raw);
+        const sel = ed.getSelection();
+        if (sel) {
+          ed.executeEdits('paste', [{ range: sel, text: normalized, forceMoveMarkers: true }]);
+          ed.pushUndoStop();
+        }
+      }, true);
+    }
+
+    // --- Custom right-click context menu ---
+    ed.onContextMenu((e) => {
+      const ev = e.event.browserEvent;
+      ev.preventDefault();
+      ev.stopPropagation();
+      const sel = ed.getSelection();
       const hasSelection = !!(sel && !sel.isEmpty());
-      // Clamp menu inside viewport
-      const x = Math.min(nativeEvent.clientX, window.innerWidth - 220);
-      const y = Math.min(nativeEvent.clientY, window.innerHeight - 320);
-      setContextMenu({ x, y, hasSelection });
+
+      const clickX = ev.clientX;
+      const clickY = ev.clientY;
+
+      // Decide: show below click OR above if not enough space below
+      const showAbove = clickY + MENU_H > window.innerHeight - 20;
+      // Decide: show right of click OR to the left if overflows
+      const x = clickX + MENU_W > window.innerWidth ? clickX - MENU_W : clickX;
+      const y = showAbove ? clickY - MENU_H : clickY;
+
+      setContextMenu({ x: Math.max(4, x), y: Math.max(4, y), hasSelection, showAbove });
     });
 
-    editor.updateOptions({ fontSize, wordWrap, minimap: { enabled: minimapEnabled }, lineNumbers });
+    ed.updateOptions({ fontSize, wordWrap, minimap: { enabled: minimapEnabled }, lineNumbers });
   }, [fontSize, wordWrap, minimapEnabled, lineNumbers, onCursorChange, onSave]);
 
-  const handleChange: OnChange = useCallback((val) => {
-    onChange?.(val || '');
-  }, [onChange]);
+  const handleChange: OnChange = useCallback((val) => onChange?.(val || ''), [onChange]);
 
   useEffect(() => { editorRef.current?.updateOptions({ fontSize }); }, [fontSize]);
   useEffect(() => { editorRef.current?.updateOptions({ wordWrap }); }, [wordWrap]);
   useEffect(() => { editorRef.current?.updateOptions({ minimap: { enabled: minimapEnabled } }); }, [minimapEnabled]);
   useEffect(() => { editorRef.current?.updateOptions({ lineNumbers }); }, [lineNumbers]);
 
-  // --- Context menu actions ---
-  const showFeedback = (msg: string) => {
-    setCopyFeedback(msg);
-    setTimeout(() => setCopyFeedback(null), 1500);
-  };
-
+  // ---- Context menu actions ----
   const ctxCopy = useCallback(async () => {
-    const editor = editorRef.current;
-    if (!editor) return;
-    const sel = editor.getSelection();
-    const selectedText = sel && !sel.isEmpty()
-      ? editor.getModel()?.getValueInRange(sel) || ''
-      : '';
-    if (selectedText) {
-      await navigator.clipboard.writeText(selectedText);
-      showFeedback('Copied!');
-    }
+    const ed = editorRef.current; if (!ed) return;
+    const sel = ed.getSelection();
+    const text = sel && !sel.isEmpty() ? ed.getModel()?.getValueInRange(sel) || '' : '';
+    if (text) { await writeClipboard(text); toast('Copied!'); }
     setContextMenu(null);
   }, []);
 
   const ctxCopyAll = useCallback(async () => {
-    const editor = editorRef.current;
-    if (!editor) return;
-    const all = editor.getModel()?.getValue() || '';
-    await navigator.clipboard.writeText(all);
-    showFeedback('All copied!');
+    const text = editorRef.current?.getModel()?.getValue() || '';
+    await writeClipboard(text);
+    toast('All copied!');
     setContextMenu(null);
   }, []);
 
   const ctxCut = useCallback(async () => {
-    const editor = editorRef.current;
-    if (!editor) return;
-    const sel = editor.getSelection();
+    const ed = editorRef.current; if (!ed) return;
+    const sel = ed.getSelection();
     if (sel && !sel.isEmpty()) {
-      const text = editor.getModel()?.getValueInRange(sel) || '';
-      await navigator.clipboard.writeText(text);
-      // Delete selected text
-      editor.executeEdits('cut', [{ range: sel, text: '', forceMoveMarkers: true }]);
+      const text = ed.getModel()?.getValueInRange(sel) || '';
+      await writeClipboard(text);
+      ed.executeEdits('cut', [{ range: sel, text: '', forceMoveMarkers: true }]);
     }
     setContextMenu(null);
+    ed.focus();
   }, []);
 
   const ctxPaste = useCallback(async () => {
-    const editor = editorRef.current;
-    if (!editor) return;
+    const ed = editorRef.current; if (!ed) return;
     setContextMenu(null);
-    try {
-      const text = await navigator.clipboard.readText();
-      if (!text) return;
-      const sel = editor.getSelection();
-      if (!sel) return;
-      // Normalize line endings — \r\n → \n
-      const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-      editor.executeEdits('paste', [{
-        range: sel,
-        text: normalized,
-        forceMoveMarkers: true,
-      }]);
-      editor.focus();
-    } catch {
-      // Clipboard API not permitted — fallback: focus editor so Ctrl+V still works
-      editor.focus();
+    const raw = await readClipboard();
+    if (!raw) {
+      // Clipboard read failed — trigger native paste via keyboard shortcut
+      ed.focus();
+      return;
     }
+    const text = normalizeText(raw);
+    const sel = ed.getSelection();
+    if (sel) {
+      ed.executeEdits('paste', [{ range: sel, text, forceMoveMarkers: true }]);
+      ed.pushUndoStop();
+    }
+    ed.focus();
   }, []);
 
   const ctxSelectAll = useCallback(() => {
-    const editor = editorRef.current;
-    if (!editor) return;
-    const range = editor.getModel()?.getFullModelRange();
-    if (range) editor.setSelection(range);
+    const ed = editorRef.current; if (!ed) return;
+    const range = ed.getModel()?.getFullModelRange();
+    if (range) ed.setSelection(range);
     setContextMenu(null);
-    editor.focus();
+    ed.focus();
   }, []);
 
   const ctxFormat = useCallback(() => {
@@ -206,70 +233,51 @@ export function CodeEditor({
   }, []);
 
   return (
-    <div ref={containerRef} className="relative h-full">
-      {/* Editor settings button */}
-      <div className="absolute top-2 right-2 z-10 flex items-center gap-1">
+    <div className="relative h-full">
+      {/* Settings toggle */}
+      <div className="absolute top-2 right-2 z-10">
         <button
           onClick={() => setShowSettings(!showSettings)}
-          className={clsx(
-            'p-1.5 rounded-md transition-colors',
-            showSettings ? 'bg-cyan-500/20 text-cyan-400' : 'bg-slate-700/50 text-slate-400 hover:text-white'
-          )}
+          className={clsx('p-1.5 rounded-md transition-colors', showSettings ? 'bg-cyan-500/20 text-cyan-400' : 'bg-slate-700/50 text-slate-400 hover:text-white')}
           title="Editor Settings"
         >
           <Settings className="w-4 h-4" />
         </button>
       </div>
 
-      {/* Copy feedback toast */}
-      {copyFeedback && (
-        <div className="absolute top-10 left-1/2 -translate-x-1/2 z-50 px-3 py-1.5 bg-cyan-600 text-white text-xs rounded-full shadow-lg pointer-events-none animate-pulse-subtle">
-          {copyFeedback}
+      {/* Toast */}
+      {toastMsg && (
+        <div className="absolute top-10 left-1/2 -translate-x-1/2 z-50 px-3 py-1.5 bg-cyan-600 text-white text-xs rounded-full shadow-lg pointer-events-none">
+          {toastMsg}
         </div>
       )}
 
-      {/* Editor settings panel */}
+      {/* Settings panel */}
       {showSettings && (
         <div className="absolute top-10 right-2 z-20 w-64 bg-slate-800 border border-slate-700 rounded-lg shadow-xl p-3 space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-sm text-slate-300">Font Size: {fontSize}px</span>
             <div className="flex items-center gap-1">
-              <button onClick={() => setFontSize((s) => Math.max(s - 2, 8))} className="p-1 hover:bg-slate-700 rounded">
-                <ZoomOut className="w-4 h-4 text-slate-400" />
-              </button>
-              <button onClick={() => setFontSize(14)} className="p-1 hover:bg-slate-700 rounded">
-                <RotateCcw className="w-4 h-4 text-slate-400" />
-              </button>
-              <button onClick={() => setFontSize((s) => Math.min(s + 2, 32))} className="p-1 hover:bg-slate-700 rounded">
-                <ZoomIn className="w-4 h-4 text-slate-400" />
-              </button>
+              <button onClick={() => setFontSize((s) => Math.max(s - 2, 8))} className="p-1 hover:bg-slate-700 rounded"><ZoomOut className="w-4 h-4 text-slate-400" /></button>
+              <button onClick={() => setFontSize(14)} className="p-1 hover:bg-slate-700 rounded"><RotateCcw className="w-4 h-4 text-slate-400" /></button>
+              <button onClick={() => setFontSize((s) => Math.min(s + 2, 32))} className="p-1 hover:bg-slate-700 rounded"><ZoomIn className="w-4 h-4 text-slate-400" /></button>
             </div>
           </div>
           <div className="flex items-center justify-between">
             <span className="text-sm text-slate-300">Word Wrap</span>
-            <button
-              onClick={() => setWordWrap(wordWrap === 'on' ? 'off' : 'on')}
-              className={clsx('px-2 py-1 text-xs rounded transition-colors', wordWrap === 'on' ? 'bg-cyan-500/20 text-cyan-400' : 'bg-slate-700 text-slate-400')}
-            >
+            <button onClick={() => setWordWrap(wordWrap === 'on' ? 'off' : 'on')} className={clsx('px-2 py-1 text-xs rounded', wordWrap === 'on' ? 'bg-cyan-500/20 text-cyan-400' : 'bg-slate-700 text-slate-400')}>
               {wordWrap === 'on' ? 'On' : 'Off'}
             </button>
           </div>
           <div className="flex items-center justify-between">
             <span className="text-sm text-slate-300">Minimap</span>
-            <button
-              onClick={() => setMinimapEnabled(!minimapEnabled)}
-              className={clsx('px-2 py-1 text-xs rounded transition-colors', minimapEnabled ? 'bg-cyan-500/20 text-cyan-400' : 'bg-slate-700 text-slate-400')}
-            >
+            <button onClick={() => setMinimapEnabled(!minimapEnabled)} className={clsx('px-2 py-1 text-xs rounded', minimapEnabled ? 'bg-cyan-500/20 text-cyan-400' : 'bg-slate-700 text-slate-400')}>
               {minimapEnabled ? 'On' : 'Off'}
             </button>
           </div>
           <div className="flex items-center justify-between">
             <span className="text-sm text-slate-300">Line Numbers</span>
-            <select
-              value={lineNumbers}
-              onChange={(e) => setLineNumbers(e.target.value as typeof lineNumbers)}
-              className="bg-slate-700 text-slate-300 text-sm rounded px-2 py-1 border-none outline-none"
-            >
+            <select value={lineNumbers} onChange={(e) => setLineNumbers(e.target.value as typeof lineNumbers)} className="bg-slate-700 text-slate-300 text-sm rounded px-2 py-1 border-none outline-none">
               <option value="on">On</option>
               <option value="relative">Relative</option>
               <option value="off">Off</option>
@@ -278,7 +286,6 @@ export function CodeEditor({
         </div>
       )}
 
-      {/* Monaco Editor */}
       <Editor
         height="100%"
         language={languageMap[language] || 'plaintext'}
@@ -309,7 +316,6 @@ export function CodeEditor({
           insertSpaces: true,
           autoClosingBrackets: 'always',
           autoClosingQuotes: 'always',
-          // Disabled to prevent paste from breaking line structure
           formatOnPaste: false,
           formatOnType: false,
           suggestOnTriggerCharacters: true,
@@ -317,7 +323,6 @@ export function CodeEditor({
           quickSuggestions: { other: true, comments: false, strings: true },
           parameterHints: { enabled: true },
           renderWhitespace: 'selection',
-          // Disable Monaco's built-in context menu — we use our own
           contextmenu: false,
           mouseWheelZoom: true,
           multiCursorModifier: 'alt',
@@ -325,76 +330,22 @@ export function CodeEditor({
         }}
       />
 
-      {/* Custom right-click context menu */}
+      {/* Custom context menu — positioned near click point */}
       {contextMenu && (
         <div
-          className="fixed z-[9999] min-w-[200px] bg-slate-800 border border-slate-600/80 rounded-xl shadow-2xl overflow-hidden py-1"
+          className="fixed z-[9999] w-52 bg-slate-800 border border-slate-600/70 rounded-xl shadow-2xl overflow-hidden py-1"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          {/* Cut */}
-          <ContextMenuItem
-            icon={<Scissors className="w-3.5 h-3.5" />}
-            label="Cut"
-            shortcut="Ctrl+X"
-            disabled={!contextMenu.hasSelection || readOnly}
-            onClick={ctxCut}
-          />
-
-          {/* Copy */}
-          <ContextMenuItem
-            icon={<Copy className="w-3.5 h-3.5" />}
-            label="Copy"
-            shortcut="Ctrl+C"
-            disabled={!contextMenu.hasSelection}
-            onClick={ctxCopy}
-          />
-
-          {/* Copy All */}
-          <ContextMenuItem
-            icon={<FileText className="w-3.5 h-3.5" />}
-            label="Copy All"
-            shortcut="—"
-            onClick={ctxCopyAll}
-          />
-
-          {/* Paste */}
-          <ContextMenuItem
-            icon={<Clipboard className="w-3.5 h-3.5" />}
-            label="Paste"
-            shortcut="Ctrl+V"
-            disabled={readOnly}
-            onClick={ctxPaste}
-          />
-
+          <MenuItem icon={<Scissors className="w-3.5 h-3.5" />} label="Cut" shortcut="Ctrl+X" disabled={!contextMenu.hasSelection || readOnly} onClick={ctxCut} />
+          <MenuItem icon={<Copy className="w-3.5 h-3.5" />} label="Copy" shortcut="Ctrl+C" disabled={!contextMenu.hasSelection} onClick={ctxCopy} />
+          <MenuItem icon={<FileText className="w-3.5 h-3.5" />} label="Copy All" shortcut="" onClick={ctxCopyAll} />
+          <MenuItem icon={<Clipboard className="w-3.5 h-3.5" />} label="Paste" shortcut="Ctrl+V" disabled={readOnly} onClick={ctxPaste} />
           <div className="my-1 border-t border-slate-700/60" />
-
-          {/* Select All */}
-          <ContextMenuItem
-            icon={<CheckSquare className="w-3.5 h-3.5" />}
-            label="Select All"
-            shortcut="Ctrl+A"
-            onClick={ctxSelectAll}
-          />
-
+          <MenuItem icon={<CheckSquare className="w-3.5 h-3.5" />} label="Select All" shortcut="Ctrl+A" onClick={ctxSelectAll} />
           <div className="my-1 border-t border-slate-700/60" />
-
-          {/* Format Document */}
-          <ContextMenuItem
-            icon={<AlignLeft className="w-3.5 h-3.5" />}
-            label="Format Document"
-            shortcut="Ctrl+Shift+F"
-            disabled={readOnly}
-            onClick={ctxFormat}
-          />
-
-          {/* Find & Replace */}
-          <ContextMenuItem
-            icon={<Search className="w-3.5 h-3.5" />}
-            label="Find / Replace"
-            shortcut="Ctrl+H"
-            onClick={ctxFind}
-          />
+          <MenuItem icon={<AlignLeft className="w-3.5 h-3.5" />} label="Format Document" shortcut="Shift+F" disabled={readOnly} onClick={ctxFormat} />
+          <MenuItem icon={<Search className="w-3.5 h-3.5" />} label="Find / Replace" shortcut="Ctrl+H" onClick={ctxFind} />
         </div>
       )}
 
@@ -409,30 +360,26 @@ export function CodeEditor({
   );
 }
 
-// ---- Reusable menu item ----
-interface ContextMenuItemProps {
+interface MenuItemProps {
   icon: React.ReactNode;
   label: string;
   shortcut: string;
   onClick: () => void;
   disabled?: boolean;
 }
-
-function ContextMenuItem({ icon, label, shortcut, onClick, disabled }: ContextMenuItemProps) {
+function MenuItem({ icon, label, shortcut, onClick, disabled }: MenuItemProps) {
   return (
     <button
       onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); if (!disabled) onClick(); }}
       disabled={disabled}
       className={clsx(
         'w-full flex items-center gap-2.5 px-3 py-2 text-sm transition-colors',
-        disabled
-          ? 'text-slate-600 cursor-not-allowed'
-          : 'text-slate-200 hover:bg-slate-700/70 hover:text-white cursor-pointer'
+        disabled ? 'text-slate-600 cursor-not-allowed' : 'text-slate-200 hover:bg-slate-700/70 hover:text-white cursor-pointer'
       )}
     >
       <span className={clsx('shrink-0', disabled ? 'text-slate-600' : 'text-slate-400')}>{icon}</span>
       <span className="flex-1 text-left">{label}</span>
-      <span className="text-[10px] text-slate-500 font-mono shrink-0">{shortcut}</span>
+      {shortcut && <span className="text-[10px] text-slate-500 font-mono shrink-0">{shortcut}</span>}
     </button>
   );
 }
